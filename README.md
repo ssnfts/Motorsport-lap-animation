@@ -24,6 +24,6 @@ Python 3.11+. The tests are offline and need no network connection.
 
 ## Scope
 
-The current modules focus on vehicle geometry and motion planning. The rigging
-interface binds a selected vehicle's parts and bakes the resulting motion in
-3ds Max.
+The current modules focus on vehicle geometry and motion planning. A planned
+rigging interface will bind a selected vehicle's parts and bake the resulting
+motion in 3ds Max.
