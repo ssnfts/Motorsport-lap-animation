@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+from dataclasses import FrozenInstanceError
+import math
 import sys
 from pathlib import Path
+
+import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 
@@ -44,6 +48,34 @@ def test_self_intersection_is_a_warning():
     assert _has_issue(issues, "self_intersection", "warning")
 
 
+def test_collinear_non_adjacent_overlap_is_a_warning():
+    issues = preflight_open_path(
+        [(0, 0, 0), (4, 0, 0), (3, 0, 0), (1, 0, 0)], VEHICLE_PRESETS["car"]
+    )
+
+    assert _has_issue(issues, "self_intersection", "warning")
+
+
+def test_non_adjacent_endpoint_intersection_is_a_warning():
+    issues = preflight_open_path(
+        [(0, 0, 0), (2, 0, 0), (2, 2, 0), (0, 0, 0)], VEHICLE_PRESETS["car"]
+    )
+
+    assert _has_issue(issues, "self_intersection", "warning")
+
+
+@pytest.mark.parametrize("coordinate_index", (0, 1, 2))
+@pytest.mark.parametrize("invalid_coordinate", (math.nan, math.inf, -math.inf))
+def test_non_finite_coordinate_is_rejected_before_path_math(
+    coordinate_index, invalid_coordinate
+):
+    point = [1.0, 0.0, 0.0]
+    point[coordinate_index] = invalid_coordinate
+
+    with pytest.raises(ValueError, match="coordinates must be finite"):
+        preflight_open_path([(0, 0, 0), tuple(point)], VEHICLE_PRESETS["car"])
+
+
 def test_tight_curve_is_reported_before_baking():
     issues = preflight_open_path(
         [(0, 0, 0), (1, 0, 0), (1, 0.1, 0)], VEHICLE_PRESETS["bus"]
@@ -64,3 +96,5 @@ def test_issue_is_an_immutable_value_object():
     issue = SplineIssue("sharp_kink", "warning", "Path turns abruptly", 1)
 
     assert issue.index == 1
+    with pytest.raises(FrozenInstanceError):
+        issue.index = 2

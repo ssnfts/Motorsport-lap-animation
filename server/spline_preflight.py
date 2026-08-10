@@ -112,6 +112,8 @@ def preflight_open_path(
 
     validate_profile(profile)
     path = list(points)
+    if any(not math.isfinite(coordinate) for point in path for coordinate in point):
+        raise ValueError("path coordinates must be finite")
     issues: list[SplineIssue] = []
 
     if len({tuple(point) for point in path}) < 2:
