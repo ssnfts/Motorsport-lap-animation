@@ -114,6 +114,9 @@ def validate_profile(profile: VehicleProfile) -> None:
         "max_roll_deg",
         "max_pitch_deg",
     )
+    for field_name in (*positive_fields, "damping_ratio"):
+        if not math.isfinite(getattr(profile, field_name)):
+            raise ValueError(f"{field_name} must be finite")
     for field_name in positive_fields:
         if getattr(profile, field_name) <= 0.0:
             raise ValueError(f"{field_name} must be greater than zero")

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 import sys
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -57,6 +58,31 @@ def test_invalid_profile_is_rejected():
         validate_profile(invalid)
 
 
+@pytest.mark.parametrize(
+    "field_name",
+    (
+        "wheelbase",
+        "track",
+        "tyre_radius",
+        "top_speed_mps",
+        "acceleration_mps2",
+        "braking_mps2",
+        "lateral_grip_g",
+        "max_steer_deg",
+        "spring_travel_m",
+        "damping_ratio",
+        "max_roll_deg",
+        "max_pitch_deg",
+    ),
+)
+@pytest.mark.parametrize("invalid_value", (math.nan, math.inf, -math.inf))
+def test_profile_rejects_non_finite_physical_values(field_name, invalid_value):
+    invalid = replace(VEHICLE_PRESETS["car"], **{field_name: invalid_value})
+
+    with pytest.raises(ValueError, match=field_name):
+        validate_profile(invalid)
+
+
 def test_curve_speed_limit_respects_vehicle_top_speed():
     car = VEHICLE_PRESETS["car"]
     assert curve_speed_limit(1_000_000.0, car) == car.top_speed_mps
@@ -65,6 +91,15 @@ def test_curve_speed_limit_respects_vehicle_top_speed():
 def test_ackermann_angles_are_clamped_to_steering_lock():
     inner, outer = ackermann_angles(80.0, wheelbase=2.7, track=1.55, max_steer_deg=25.0)
     assert 0.0 < outer <= inner <= 25.0
+
+
+def test_ackermann_angles_preserve_negative_steering_sign():
+    inner, outer = ackermann_angles(-20.0, wheelbase=2.7, track=1.55)
+    assert inner < outer < 0.0
+
+
+def test_wheel_rotation_preserves_negative_travel_sign():
+    assert wheel_rotation_degrees(-2.0 * math.pi * 0.3, 0.3) == pytest.approx(-360.0)
 
 
 def test_body_response_never_exceeds_profile_limits():
