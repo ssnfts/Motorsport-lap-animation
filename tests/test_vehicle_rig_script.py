@@ -198,3 +198,16 @@ def test_spline_sampler_uses_the_actual_final_knot(source: str) -> None:
 
 def test_bake_sets_the_requested_animation_range(source: str) -> None:
     assert "animationRange = interval startFrame endFrame" in source
+
+
+def test_imported_vehicle_assembly_uses_wheel_centres_and_body_carrier(
+    source: str,
+) -> None:
+    for token in (
+        "vrigBoundsCenter",
+        "nodeGetBoundingBox",
+        "_BodyCarrier",
+        "bodyCarrier.parent = root",
+        "wheel.position = vrigBoundsCenter wheelSets[wheelIndex]",
+    ):
+        assert token in source

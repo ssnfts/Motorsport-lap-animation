@@ -602,6 +602,20 @@ fn vrigClassifyWheelNode node =
     else 0
 )
 
+fn vrigBoundsCenter nodes =
+(
+    local firstBounds = nodeGetBoundingBox nodes[1] nodes[1].transform
+    local low = firstBounds[1]
+    local high = firstBounds[2]
+    for index = 2 to nodes.count do
+    (
+        local bounds = nodeGetBoundingBox nodes[index] nodes[index].transform
+        low = [amin low.x bounds[1].x, amin low.y bounds[1].y, amin low.z bounds[1].z]
+        high = [amax high.x bounds[2].x, amax high.y bounds[2].y, amax high.z bounds[2].z]
+    )
+    (low + high) / 2.0
+)
+
 fn vrigAssembleSelectedVehicle vehicleName =
 (
     local sourceNodes = for node in selection where (superClassOf node == GeometryClass) collect node
@@ -624,17 +638,26 @@ fn vrigAssembleSelectedVehicle vehicleName =
         return #(false, (rootName + " already exists. Remove the generated rig before assembling again."), undefined, undefined, #())
 
     local root = point name:rootName size:25 box:off cross:on axistripod:on centermarker:off wirecolor:(color 120 220 255)
+    root.position = vrigBoundsCenter sourceNodes
+    local bodyCarrier = point name:("VRIG_" + vehicleName + "_BodyCarrier") size:20 box:off cross:on axistripod:on centermarker:off wirecolor:(color 160 255 160)
+    bodyCarrier.position = root.position
+    bodyCarrier.parent = root
     local wheelNames = #("VRIG_" + vehicleName + "_Wheel_FL", "VRIG_" + vehicleName + "_Wheel_FR", "VRIG_" + vehicleName + "_Wheel_RL", "VRIG_" + vehicleName + "_Wheel_RR")
     local wheels = for wheelName in wheelNames collect (point name:wheelName size:16 box:off cross:on axistripod:on centermarker:off wirecolor:(color 255 200 80))
-    for wheel in wheels do wheel.parent = root
+    for wheelIndex = 1 to 4 do
+    (
+        local wheel = wheels[wheelIndex]
+        wheel.position = vrigBoundsCenter wheelSets[wheelIndex]
+        wheel.parent = root
+    )
 
     for node in sourceNodes do
     (
         vrigRecordOriginalState node
         local wheelIndex = vrigClassifyWheelNode node
-        if wheelIndex == 0 then node.parent = root else node.parent = wheels[wheelIndex]
+        if wheelIndex == 0 then node.parent = bodyCarrier else node.parent = wheels[wheelIndex]
     )
-    #(true, ("Assembled " + (sourceNodes.count as string) + " mesh nodes non-destructively."), root, root, wheels)
+    #(true, ("Assembled " + (sourceNodes.count as string) + " mesh nodes non-destructively."), root, bodyCarrier, wheels)
 )
 
 fn vrigBuildOpenSpline splineName points =
