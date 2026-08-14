@@ -105,6 +105,15 @@ def test_script_uses_layered_controllers_for_manual_edits(source: str) -> None:
     assert "rotation_list()" in source
 
 
+def test_script_exposes_scale_and_forward_axis_controls(source: str) -> None:
+    # A model built at a scale other than the scene unit setting, or facing
+    # an axis other than +X, must be correctable without editing the source.
+    assert "Scene units per metre" in source
+    assert "Vehicle faces" in source
+    for axis in ('"+X"', '"-X"', '"+Y"', '"-Y"'):
+        assert axis in source
+
+
 def test_script_never_performs_prohibited_host_operations(source: str) -> None:
     forbidden = (
         "saveMaxFile",
@@ -126,6 +135,25 @@ def test_script_renders_nothing(source: str) -> None:
     assert not re.search(r"\brender\s*\(", source, flags=re.IGNORECASE)
 
 
+# Using one of these as an identifier is a load-time syntax error in Max,
+# which no amount of offline contract checking would otherwise reveal.
+MAXSCRIPT_KEYWORDS = frozenset(
+    """
+    and animate at by case catch collect continue coordsys do else exit fn for
+    from function global if in local mapped not of off on or parameters
+    persistent plugin rcmenu return rollout set struct then throw to tool try
+    undo utility when where while with
+    """.split()
+)
+
+
+def test_script_never_uses_a_maxscript_keyword_as_an_identifier(source: str) -> None:
+    declarations = re.findall(r"\blocal\s+([A-Za-z_]\w*)", source)
+    declarations += re.findall(r"\bfn\s+([A-Za-z_]\w*)", source)
+    clashes = sorted({name for name in declarations if name in MAXSCRIPT_KEYWORDS})
+    assert not clashes, f"reserved MaxScript words used as identifiers: {clashes}"
+
+
 def test_preflight_reports_every_python_issue_code(source: str) -> None:
     for code in (
         "too_short",
@@ -136,3 +164,16 @@ def test_preflight_reports_every_python_issue_code(source: str) -> None:
         "steering_limit",
     ):
         assert code in source
+
+
+def test_script_exposes_non_destructive_import_assembly(source: str) -> None:
+    for token in (
+        "Auto Assemble Imported Vehicle",
+        "vrigAssembleSelectedVehicle",
+        "vrigClassifyWheelNode",
+        "wheelfl",
+        "wheelfr",
+        "wheelbl",
+        "wheelbr",
+    ):
+        assert token in source
