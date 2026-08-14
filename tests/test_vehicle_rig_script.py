@@ -198,6 +198,35 @@ def test_bake_sets_the_requested_animation_range(source: str) -> None:
     assert "animationRange = interval startFrame endFrame" in source
 
 
+def test_bake_integrates_curvature_for_continuous_heading(source: str) -> None:
+    for token in (
+        "fn vrigYawDeltaDegrees",
+        "local previousYaw = vrigHeadingAtDistance points distances 0.0",
+        "local rawYawStep = vrigYawDeltaDegrees curvature travelStep",
+        "local yaw = previousYaw + yawStep",
+        "previousYaw = yaw",
+    ):
+        assert token in source
+
+
+def test_bake_caps_per_frame_yaw_for_unrideable_corner_knots(source: str) -> None:
+    for token in (
+        "local maxYawStep = 12.0",
+        "local yawStep = vrigClamp rawYawStep maxYawStep",
+        "local yaw = previousYaw + yawStep",
+    ):
+        assert token in source
+
+
+def test_bake_reports_when_sharp_corner_yaw_is_limited(source: str) -> None:
+    for token in (
+        "local yawLimited = false",
+        "if (abs (yawStep - rawYawStep)) > 1e-6 do yawLimited = true",
+        "Sharp spline corner was yaw-limited",
+    ):
+        assert token in source
+
+
 def test_imported_vehicle_assembly_uses_wheel_centres_and_body_carrier(
     source: str,
 ) -> None:

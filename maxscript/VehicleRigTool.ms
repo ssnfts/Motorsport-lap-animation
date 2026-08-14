@@ -478,6 +478,14 @@ fn vrigHeadingAtDistance points distances travelled =
     if (length forward) <= 1e-9 then 0.0 else (atan2 forward.y forward.x)
 )
 
+-- Curvature is radians per metre. Integrating it by travelled distance
+-- produces continuous yaw at corner knots instead of snapping to a new
+-- line-segment tangent.
+fn vrigYawDeltaDegrees curvature travelDistance =
+(
+    curvature * travelDistance * (180.0 / pi)
+)
+
 /* ------------------------------------------------------------------ *
  * Restore records. User properties keep the data host-portable and
  * survive a save, unlike an in-memory table.
@@ -958,6 +966,11 @@ fn vrigBakeAnimation profile splineNode rootNode bodyNode wheelNodes extraNodes 
     local wheelSpin = #(0.0, 0.0, 0.0, 0.0)
     local previousDistance = 0.0
     local previousSpeed = 0.0
+    local previousYaw = vrigHeadingAtDistance points distances 0.0
+    -- Safety ceiling for artist-authored corner knots. It prevents any one
+    -- frame from forcing a visible 90-degree pose break on the vehicle.
+    local maxYawStep = 12.0
+    local yawLimited = false
 
     with animate on
     (
@@ -970,7 +983,11 @@ fn vrigBakeAnimation profile splineNode rootNode bodyNode wheelNodes extraNodes 
             local curvature = state[3]
 
             local worldPoint = (vrigPointAtDistance points distances travelled) * scale
-            local yaw = vrigHeadingAtDistance points distances travelled
+            local travelStep = travelled - previousDistance
+            local rawYawStep = vrigYawDeltaDegrees curvature travelStep
+            local yawStep = vrigClamp rawYawStep maxYawStep
+            if (abs (yawStep - rawYawStep)) > 1e-6 do yawLimited = true
+            local yaw = previousYaw + yawStep
 
             local stepSeconds = 1.0 / (frameRate as float) * timeScale
             local longitudinal = if stepSeconds <= 1e-9 then 0.0 else ((speed - previousSpeed) / stepSeconds)
@@ -1005,7 +1022,6 @@ fn vrigBakeAnimation profile splineNode rootNode bodyNode wheelNodes extraNodes 
                 local steerLeft = if steerCentre >= 0.0 then steerAngles[1] else steerAngles[2]
                 local steerRight = if steerCentre >= 0.0 then steerAngles[2] else steerAngles[1]
 
-                local travelStep = travelled - previousDistance
                 for index = 1 to wheelPivots.count do
                 (
                     wheelSpin[index] += vrigWheelRotationDegrees travelStep profile.tyreRadius
@@ -1026,6 +1042,7 @@ fn vrigBakeAnimation profile splineNode rootNode bodyNode wheelNodes extraNodes 
 
             previousDistance = travelled
             previousSpeed = speed
+            previousYaw = yaw
         )
     )
 
@@ -1033,6 +1050,11 @@ fn vrigBakeAnimation profile splineNode rootNode bodyNode wheelNodes extraNodes 
     if timeScale > 1.0 do
         warning = "Frame range is shorter than the physical drive time; motion was sped up by " \
             + (formattedPrint timeScale format:".2f") + "x."
+    if yawLimited do
+    (
+        if warning != "" do warning += " "
+        warning += "Sharp spline corner was yaw-limited to 12 degrees per frame."
+    )
     #(true, warning, timeScale)
 )
 
