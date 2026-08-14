@@ -616,12 +616,15 @@ fn vrigClassifyWheelNode node =
 
 fn vrigBoundsCenter nodes =
 (
-    local firstBounds = nodeGetBoundingBox nodes[1] nodes[1].transform
+    -- Identity coordinates request evaluated world bounds. Passing a node's
+    -- transform instead returns local bounds for detached imports, placing
+    -- every calculated wheel centre at the origin.
+    local firstBounds = nodeGetBoundingBox nodes[1] (matrix3 1)
     local low = firstBounds[1]
     local high = firstBounds[2]
     for index = 2 to nodes.count do
     (
-        local bounds = nodeGetBoundingBox nodes[index] nodes[index].transform
+        local bounds = nodeGetBoundingBox nodes[index] (matrix3 1)
         low = [amin low.x bounds[1].x, amin low.y bounds[1].y, amin low.z bounds[1].z]
         high = [amax high.x bounds[2].x, amax high.y bounds[2].y, amax high.z bounds[2].z]
     )
@@ -822,19 +825,30 @@ fn vrigCreateHelpers profile rootNode bodyNode wheelNodes scale =
     steering.transform = bodyNode.transform
     pathGuide.transform = rootNode.transform
 
-    local wheels = #()
-    local wheelNames = #("VRIG_Wheel_FL", "VRIG_Wheel_FR", "VRIG_Wheel_RL", "VRIG_Wheel_RR")
+    local wheelPivots = #()
+    local wheelSpins = #()
+    local wheelTokens = #("FL", "FR", "RL", "RR")
     for index = 1 to 4 do
     (
-        local wheel = Circle name:wheelNames[index] radius:wheelRadius \
+        -- Source wheel groups keep their native transforms. The generated
+        -- circle is the steering controller and its child is the spin pivot.
+        local wheelPivot = Circle name:("VRIG_WheelPivot_" + wheelTokens[index]) radius:wheelRadius \
             wirecolor:(color 255 255 255)
-        wheel.renderable = false
-        wheel.parent = master
-        wheel.transform = wheelNodes[index].transform
-        append wheels wheel
+        wheelPivot.renderable = false
+        wheelPivot.parent = master
+        wheelPivot.transform = wheelNodes[index].transform
+
+        local wheelSpin = Point name:("VRIG_WheelSpin_" + wheelTokens[index]) size:(wheelRadius * 0.65) \
+            box:off cross:on axistripod:on centermarker:on wirecolor:(color 255 190 80)
+        wheelSpin.renderable = false
+        wheelSpin.transform = wheelNodes[index].transform
+        wheelSpin.parent = wheelPivot
+
+        append wheelPivots wheelPivot
+        append wheelSpins wheelSpin
     )
 
-    #(master, body, steering, pathGuide, wheels)
+    #(master, body, steering, pathGuide, wheelPivots, wheelSpins)
 )
 
 /* ------------------------------------------------------------------ *
@@ -880,7 +894,8 @@ fn vrigBakeAnimation profile splineNode rootNode bodyNode wheelNodes extraNodes 
     local body = helpers[2]
     local steering = helpers[3]
     local pathGuide = helpers[4]
-    local wheels = helpers[5]
+    local wheelPivots = helpers[5]
+    local wheelSpins = helpers[6]
 
     -- Bind while every generated helper is still at its captured rest pose.
     -- Parenting after the animated key loop bakes an inverse offset from the
@@ -899,7 +914,7 @@ fn vrigBakeAnimation profile splineNode rootNode bodyNode wheelNodes extraNodes 
         if wheelNodes[index] != rootNode do
         (
             vrigRecordOriginalState wheelNodes[index]
-            wheelNodes[index].parent = wheels[index]
+            wheelNodes[index].parent = wheelSpins[index]
         )
     )
 
@@ -909,18 +924,11 @@ fn vrigBakeAnimation profile splineNode rootNode bodyNode wheelNodes extraNodes 
         extra.parent = steering
     )
 
-    -- Spinning an imported mesh's point carrier rotates its offset object
-    -- pivots around the car. Native groups preserve those offsets, so spin
-    -- is applied to each group head; the visible circles steer only.
-    local wheelGroups = vrigWheelGroupNodes wheelNodes
-    for index = 1 to 4 do
-        if wheelGroups[index] == undefined do return #(false, "Each wheel must be a native assembled wheel group", 1.0)
-
     local masterControllers = vrigLayeredControllers master
     local bodyControllers = vrigLayeredControllers body
     local guideControllers = vrigLayeredControllers pathGuide
-    local wheelControllers = for wheel in wheels collect (vrigLayeredControllers wheel)
-    local wheelGroupControllers = for wheelGroup in wheelGroups collect (vrigLayeredControllers wheelGroup)
+    local wheelPivotControllers = for wheelPivot in wheelPivots collect (vrigLayeredControllers wheelPivot)
+    local wheelSpinControllers = for wheelSpinNode in wheelSpins collect (vrigLayeredControllers wheelSpinNode)
 
     local wheelSpin = #(0.0, 0.0, 0.0, 0.0)
     local previousDistance = 0.0
@@ -973,7 +981,7 @@ fn vrigBakeAnimation profile splineNode rootNode bodyNode wheelNodes extraNodes 
                 local steerRight = if steerCentre >= 0.0 then steerAngles[2] else steerAngles[1]
 
                 local travelStep = travelled - previousDistance
-                for index = 1 to wheels.count do
+                for index = 1 to wheelPivots.count do
                 (
                     wheelSpin[index] += vrigWheelRotationDegrees travelStep profile.tyreRadius
                     local steer = case index of
@@ -982,12 +990,12 @@ fn vrigBakeAnimation profile splineNode rootNode bodyNode wheelNodes extraNodes 
                         2: steerRight
                         default: 0.0
                     )
-                    wheelControllers[index][1].value = wheelControllers[index][3]
-                    wheelControllers[index][2].value = \
-                        ((eulerAngles 0 0 steer) as quat) * wheelControllers[index][4]
-                    wheelGroupControllers[index][1].value = wheelGroupControllers[index][3]
-                    wheelGroupControllers[index][2].value = \
-                        ((eulerAngles 0 (-wheelSpin[index]) 0) as quat) * wheelGroupControllers[index][4]
+                    wheelPivotControllers[index][1].value = wheelPivotControllers[index][3]
+                    wheelPivotControllers[index][2].value = \
+                        ((eulerAngles 0 0 steer) as quat) * wheelPivotControllers[index][4]
+                    wheelSpinControllers[index][1].value = wheelSpinControllers[index][3]
+                    wheelSpinControllers[index][2].value = \
+                        ((eulerAngles 0 (-wheelSpin[index]) 0) as quat) * wheelSpinControllers[index][4]
                 )
             )
 

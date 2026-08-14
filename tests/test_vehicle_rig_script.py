@@ -18,10 +18,8 @@ GENERATED_NODES = (
     "VRIG_Body",
     "VRIG_Steering",
     "VRIG_PathGuide",
-    "VRIG_Wheel_FL",
-    "VRIG_Wheel_FR",
-    "VRIG_Wheel_RL",
-    "VRIG_Wheel_RR",
+    "VRIG_WheelPivot_",
+    "VRIG_WheelSpin_",
 )
 
 PRESET_FIELDS = {
@@ -213,6 +211,14 @@ def test_imported_vehicle_assembly_uses_wheel_centres_and_body_carrier(
         assert token in source
 
 
+def test_wheel_centres_use_evaluated_world_bounds_for_detached_meshes(
+    source: str,
+) -> None:
+    bounds_fn = source[source.index("fn vrigBoundsCenter"):source.index("fn vrigTopAssemblyNode")]
+    assert "nodeGetBoundingBox nodes[1] (matrix3 1)" in bounds_fn
+    assert "nodeGetBoundingBox nodes[index] (matrix3 1)" in bounds_fn
+
+
 def test_source_nodes_are_bound_before_helper_keys_are_baked(source: str) -> None:
     binding = source.index("rootNode.parent = master")
     bake_loop = source.index("with animate on")
@@ -232,18 +238,24 @@ def test_imported_vehicle_assembly_uses_native_groups_for_offset_pivot_meshes(
         assert token in source
 
 
-def test_wheel_spin_is_baked_on_native_groups_not_steering_controls(
+def test_wheel_spin_uses_generated_pivots_not_native_group_heads(
     source: str,
 ) -> None:
     for token in (
-        "fn vrigWheelGroupNodes",
-        "local wheelGroups = vrigWheelGroupNodes wheelNodes",
-        "local wheelGroupControllers = for wheelGroup in wheelGroups collect (vrigLayeredControllers wheelGroup)",
-        "wheelGroupControllers[index][2].value",
+        "VRIG_WheelPivot_",
+        "VRIG_WheelSpin_",
+        "local wheelPivots = #()",
+        "local wheelSpins = #()",
+        "local wheelPivotControllers = for wheelPivot in wheelPivots collect (vrigLayeredControllers wheelPivot)",
+        "local wheelSpinControllers = for wheelSpinNode in wheelSpins collect (vrigLayeredControllers wheelSpinNode)",
+        "wheelPivotControllers[index][2].value",
+        "wheelSpinControllers[index][2].value",
     ):
         assert token in source
 
-    assert "((eulerAngles 0 (-wheelSpin[index]) steer) as quat)" not in source
+    assert "vrigLayeredControllers wheelGroup" not in source
+    assert "((eulerAngles 0 0 steer) as quat)" in source
+    assert "((eulerAngles 0 (-wheelSpin[index]) 0) as quat)" in source
 
 
 def test_remove_rig_ungroups_generated_import_groups_before_deleting_helpers(
