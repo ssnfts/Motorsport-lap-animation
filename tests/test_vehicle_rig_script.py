@@ -177,3 +177,15 @@ def test_script_exposes_non_destructive_import_assembly(source: str) -> None:
         "wheelbr",
     ):
         assert token in source
+
+
+def test_script_declares_five_path_fixtures(source: str) -> None:
+    for name in (
+        "VRIG_Test_Simple",
+        "VRIG_Test_Complex",
+        "VRIG_Test_UpHill",
+        "VRIG_Test_DownHill",
+        "VRIG_Test_InvalidKnot",
+        "EXPECTED REJECT",
+    ):
+        assert name in source

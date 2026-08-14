@@ -543,7 +543,7 @@ fn vrigBoundNodes =
 
 fn vrigGeneratedNodes =
 (
-    for node in objects where (matchPattern node.name pattern:"VRIG_*") collect node
+    for node in objects where ((matchPattern node.name pattern:"VRIG_*") and not (matchPattern node.name pattern:"VRIG_Test_*")) collect node
 )
 
 fn vrigRemoveGeneratedRig =
@@ -630,6 +630,47 @@ fn vrigAssembleSelectedVehicle vehicleName =
         if wheelIndex == 0 then node.parent = root else node.parent = wheels[wheelIndex]
     )
     #(true, ("Assembled " + (sourceNodes.count as string) + " mesh nodes non-destructively."), root, root, wheels)
+)
+
+fn vrigBuildOpenSpline splineName points =
+(
+    local path = SplineShape name:splineName
+    addNewSpline path
+    for point in points do addKnot path 1 #corner #line point
+    updateShape path
+    path
+)
+
+fn vrigAddTestLabel labelName labelText location colourValue =
+(
+    local label = text name:labelName text:labelText size:5.0
+    label.position = location
+    label.wirecolor = colourValue
+    label.renderable = false
+    label
+)
+
+-- Creates fixtures once and never replaces artist-authored or prior evidence.
+fn vrigCreateTestPaths =
+(
+    local fixtureNames = #( "VRIG_Test_Simple", "VRIG_Test_Complex", "VRIG_Test_UpHill", "VRIG_Test_DownHill", "VRIG_Test_InvalidKnot" )
+    for fixtureName in fixtureNames do
+        if getNodeByName fixtureName != undefined do
+            return #(false, (fixtureName + " already exists; keeping the existing test evidence."), #())
+
+    local paths = #()
+    append paths (vrigBuildOpenSpline "VRIG_Test_Simple" #([0, 0, 0], [30, 0, 0], [60, 12, 0], [90, 12, 0]))
+    append paths (vrigBuildOpenSpline "VRIG_Test_Complex" #([0, 30, 0], [18, 30, 0], [36, 48, 0], [54, 12, 0], [72, 48, 0], [96, 30, 0]))
+    append paths (vrigBuildOpenSpline "VRIG_Test_UpHill" #([0, 60, 0], [30, 60, 5], [60, 72, 12], [90, 72, 20]))
+    append paths (vrigBuildOpenSpline "VRIG_Test_DownHill" #([0, 90, 20], [30, 90, 12], [60, 102, 5], [90, 102, 0]))
+    append paths (vrigBuildOpenSpline "VRIG_Test_InvalidKnot" #([0, 120, 0], [30, 120, 0], [30, 120, 0], [60, 132, 0]))
+
+    vrigAddTestLabel "VRIG_Test_Label_Simple" "VALID: simple" [0, -8, 0] (color 80 255 120)
+    vrigAddTestLabel "VRIG_Test_Label_Complex" "VALID: complex" [0, 22, 0] (color 80 255 120)
+    vrigAddTestLabel "VRIG_Test_Label_UpHill" "VALID: uphill" [0, 52, 0] (color 80 255 120)
+    vrigAddTestLabel "VRIG_Test_Label_DownHill" "VALID: downhill" [0, 82, 20] (color 80 255 120)
+    vrigAddTestLabel "VRIG_Test_Label_InvalidKnot" "EXPECTED REJECT: duplicate knot" [0, 112, 0] (color 255 90 90)
+    #(true, "Created five labelled spline test fixtures.", paths)
 )
 
 -- Baked keys go on layer 1; layer 2 is zeroed and left free for manual
@@ -912,6 +953,7 @@ rollout VehicleRigRollout "Create Vehicle Rig" width:360
 
     group "Actions"
     (
+        button createTestsButton "Create Five Spline Tests" width:160
         button preflightButton "Preflight" width:160 across:2
         checkbox acknowledgeCheck "Accept warnings" checked:false enabled:false
         button bakeButton "Bake Animation" width:160 enabled:false
@@ -1024,6 +1066,13 @@ rollout VehicleRigRollout "Create Vehicle Rig" width:360
             invalidateBake()
         )
         else report #("Assembly failed:", result[2])
+    )
+
+    on createTestsButton pressed do
+    (
+        local result = vrigCreateTestPaths()
+        if result[1] then report #(result[2], "Simple, Complex, UpHill and DownHill are VALID. InvalidKnot is EXPECTED REJECT.")
+        else report #("Test-path creation skipped:", result[2])
     )
 
     on rootPick picked node do ( boundRoot = node; rootLabel.text = node.name; invalidateBake() )
