@@ -211,3 +211,46 @@ def test_imported_vehicle_assembly_uses_wheel_centres_and_body_carrier(
         "wheel.position = vrigBoundsCenter wheelSets[wheelIndex]",
     ):
         assert token in source
+
+
+def test_source_nodes_are_bound_before_helper_keys_are_baked(source: str) -> None:
+    binding = source.index("rootNode.parent = master")
+    bake_loop = source.index("with animate on")
+    assert binding < bake_loop
+
+
+def test_imported_vehicle_assembly_uses_native_groups_for_offset_pivot_meshes(
+    source: str,
+) -> None:
+    for token in (
+        "group selection name:",
+        "_BodyGroup",
+        "WheelGroup_",
+        "bodyGroup.parent = bodyCarrier",
+        "wheelGroup.parent = wheels[wheelIndex]",
+    ):
+        assert token in source
+
+
+def test_wheel_spin_is_baked_on_native_groups_not_steering_controls(
+    source: str,
+) -> None:
+    for token in (
+        "fn vrigWheelGroupNodes",
+        "local wheelGroups = vrigWheelGroupNodes wheelNodes",
+        "local wheelGroupControllers = for wheelGroup in wheelGroups collect (vrigLayeredControllers wheelGroup)",
+        "wheelGroupControllers[index][2].value",
+    ):
+        assert token in source
+
+    assert "((eulerAngles 0 (-wheelSpin[index]) steer) as quat)" not in source
+
+
+def test_remove_rig_ungroups_generated_import_groups_before_deleting_helpers(
+    source: str,
+) -> None:
+    cleanup = source[source.index("fn vrigRemoveGeneratedRig"):source.index("/* ------------------------------------------------------------------ *\n * Rig construction")]
+    assert "vrigGeneratedGroupHeads" in cleanup
+    assert "ungroup groupHead" in cleanup
+    assert cleanup.index("ungroup groupHead") < cleanup.index("vrigRestoreOriginalState")
+    assert 'deleteUserProp node "VRIG_bound"' in source

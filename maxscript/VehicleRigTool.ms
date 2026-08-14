@@ -534,9 +534,9 @@ fn vrigRestoreOriginalState node =
         node.parent = parentNode
         if restored != undefined do node.transform = restored
 
-        setUserProp node "VRIG_bound" undefined
-        setUserProp node "VRIG_originalParent" undefined
-        setUserProp node "VRIG_originalTransform" undefined
+        deleteUserProp node "VRIG_bound"
+        deleteUserProp node "VRIG_originalParent"
+        deleteUserProp node "VRIG_originalTransform"
         true
     )
 )
@@ -551,9 +551,21 @@ fn vrigGeneratedNodes =
     for node in objects where ((matchPattern node.name pattern:"VRIG_*") and not (matchPattern node.name pattern:"VRIG_Test_*")) collect node
 )
 
+fn vrigGeneratedGroupHeads =
+(
+    for node in objects where ((isGroupHead node) and (matchPattern node.name pattern:"VRIG_*") and not (matchPattern node.name pattern:"VRIG_Test_*")) collect node
+)
+
 fn vrigRemoveGeneratedRig =
 (
     local restoredCount = 0
+    -- Deleting a group head directly can leave imported meshes marked as
+    -- group members. Ungroup first, then restore the recorded artist state.
+    for groupHead in (vrigGeneratedGroupHeads()) do
+    (
+        select groupHead
+        ungroup groupHead
+    )
     for node in (vrigBoundNodes()) do
         if vrigRestoreOriginalState node do restoredCount += 1
 
@@ -616,13 +628,31 @@ fn vrigBoundsCenter nodes =
     (low + high) / 2.0
 )
 
+fn vrigTopAssemblyNode node =
+(
+    local top = node
+    while top.parent != undefined do top = top.parent
+    top
+)
+
+fn vrigTopAssemblyNodes nodes =
+(
+    local tops = #()
+    for node in nodes do
+    (
+        local top = vrigTopAssemblyNode node
+        if (findItem tops top) == 0 do append tops top
+    )
+    tops
+)
+
 fn vrigAssembleSelectedVehicle vehicleName =
 (
-    local sourceNodes = for node in selection where (superClassOf node == GeometryClass) collect node
-    if sourceNodes.count == 0 do return #(false, "Select the imported vehicle mesh nodes before assembly.", undefined, undefined, #())
+    local meshNodes = for node in selection where (superClassOf node == GeometryClass) collect node
+    if meshNodes.count == 0 do return #(false, "Select the imported vehicle mesh nodes before assembly.", undefined, undefined, #())
 
     local wheelSets = #(#(), #(), #(), #())
-    for node in sourceNodes do
+    for node in meshNodes do
     (
         if (vrigWheelMatchCount node) > 1 do
             return #(false, (node.name + " matches more than one wheel cluster."), undefined, undefined, #())
@@ -632,16 +662,38 @@ fn vrigAssembleSelectedVehicle vehicleName =
     for wheelIndex = 1 to 4 do
         if wheelSets[wheelIndex].count == 0 do
             return #(false, ("Missing wheel cluster " + (#("FL", "FR", "RL", "RR"))[wheelIndex] + "."), undefined, undefined, #())
+    local bodyMeshes = for node in meshNodes where (vrigClassifyWheelNode node) == 0 collect node
+    if bodyMeshes.count == 0 do return #(false, "No non-wheel body meshes were found.", undefined, undefined, #())
+
+    -- Marketplace vehicles commonly arrive with body pieces already grouped.
+    -- Group their highest imported parents, never a mixture of children from
+    -- existing groups, otherwise 3ds Max silently refuses the new group.
+    local sourceNodes = vrigTopAssemblyNodes meshNodes
+    local bodySet = vrigTopAssemblyNodes bodyMeshes
+    local wheelAssemblySets = #(#(), #(), #(), #())
+    for wheelIndex = 1 to 4 do wheelAssemblySets[wheelIndex] = vrigTopAssemblyNodes wheelSets[wheelIndex]
 
     local rootName = "VRIG_" + vehicleName + "_Root"
     if getNodeByName rootName != undefined do
         return #(false, (rootName + " already exists. Remove the generated rig before assembling again."), undefined, undefined, #())
 
+    -- Record before grouping: native groups are required for imports whose
+    -- visible mesh geometry is offset from a shared node pivot.
+    for node in sourceNodes do vrigRecordOriginalState node
+
     local root = point name:rootName size:25 box:off cross:on axistripod:on centermarker:off wirecolor:(color 120 220 255)
-    root.position = vrigBoundsCenter sourceNodes
+    root.position = vrigBoundsCenter meshNodes
+
     local bodyCarrier = point name:("VRIG_" + vehicleName + "_BodyCarrier") size:20 box:off cross:on axistripod:on centermarker:off wirecolor:(color 160 255 160)
-    bodyCarrier.position = root.position
+    bodyCarrier.position = vrigBoundsCenter bodyMeshes
     bodyCarrier.parent = root
+
+    select bodySet
+    group selection name:("VRIG_" + vehicleName + "_BodyGroup")
+    local bodyGroup = getNodeByName ("VRIG_" + vehicleName + "_BodyGroup")
+    if bodyGroup == undefined do return #(false, "Max could not create the vehicle body group.", undefined, undefined, #())
+    bodyGroup.parent = bodyCarrier
+
     local wheelNames = #("VRIG_" + vehicleName + "_Wheel_FL", "VRIG_" + vehicleName + "_Wheel_FR", "VRIG_" + vehicleName + "_Wheel_RL", "VRIG_" + vehicleName + "_Wheel_RR")
     local wheels = for wheelName in wheelNames collect (point name:wheelName size:16 box:off cross:on axistripod:on centermarker:off wirecolor:(color 255 200 80))
     for wheelIndex = 1 to 4 do
@@ -649,15 +701,27 @@ fn vrigAssembleSelectedVehicle vehicleName =
         local wheel = wheels[wheelIndex]
         wheel.position = vrigBoundsCenter wheelSets[wheelIndex]
         wheel.parent = root
+        select wheelAssemblySets[wheelIndex]
+        group selection name:("VRIG_" + vehicleName + "_WheelGroup_" + (#("FL", "FR", "RL", "RR"))[wheelIndex])
+        local wheelGroup = getNodeByName ("VRIG_" + vehicleName + "_WheelGroup_" + (#("FL", "FR", "RL", "RR"))[wheelIndex])
+        if wheelGroup == undefined do return #(false, ("Max could not create wheel group " + (#("FL", "FR", "RL", "RR"))[wheelIndex] + "."), undefined, undefined, #())
+        wheelGroup.parent = wheels[wheelIndex]
     )
-
-    for node in sourceNodes do
-    (
-        vrigRecordOriginalState node
-        local wheelIndex = vrigClassifyWheelNode node
-        if wheelIndex == 0 then node.parent = bodyCarrier else node.parent = wheels[wheelIndex]
-    )
+    select sourceNodes
     #(true, ("Assembled " + (sourceNodes.count as string) + " mesh nodes non-destructively."), root, bodyCarrier, wheels)
+)
+
+fn vrigWheelGroupNodes wheelNodes =
+(
+    local groups = #()
+    for wheelNode in wheelNodes do
+    (
+        local wheelGroup = undefined
+        for child in wheelNode.children do
+            if isGroupHead child do wheelGroup = child
+        append groups wheelGroup
+    )
+    groups
 )
 
 fn vrigBuildOpenSpline splineName points =
@@ -818,10 +882,45 @@ fn vrigBakeAnimation profile splineNode rootNode bodyNode wheelNodes extraNodes 
     local pathGuide = helpers[4]
     local wheels = helpers[5]
 
+    -- Bind while every generated helper is still at its captured rest pose.
+    -- Parenting after the animated key loop bakes an inverse offset from the
+    -- final pose into the source meshes and tears the vehicle apart.
+    vrigRecordOriginalState rootNode
+    rootNode.parent = master
+
+    if bodyNode != rootNode do
+    (
+        vrigRecordOriginalState bodyNode
+        bodyNode.parent = body
+    )
+
+    for index = 1 to 4 do
+    (
+        if wheelNodes[index] != rootNode do
+        (
+            vrigRecordOriginalState wheelNodes[index]
+            wheelNodes[index].parent = wheels[index]
+        )
+    )
+
+    for extra in extraNodes where extra != undefined and extra != rootNode do
+    (
+        vrigRecordOriginalState extra
+        extra.parent = steering
+    )
+
+    -- Spinning an imported mesh's point carrier rotates its offset object
+    -- pivots around the car. Native groups preserve those offsets, so spin
+    -- is applied to each group head; the visible circles steer only.
+    local wheelGroups = vrigWheelGroupNodes wheelNodes
+    for index = 1 to 4 do
+        if wheelGroups[index] == undefined do return #(false, "Each wheel must be a native assembled wheel group", 1.0)
+
     local masterControllers = vrigLayeredControllers master
     local bodyControllers = vrigLayeredControllers body
     local guideControllers = vrigLayeredControllers pathGuide
     local wheelControllers = for wheel in wheels collect (vrigLayeredControllers wheel)
+    local wheelGroupControllers = for wheelGroup in wheelGroups collect (vrigLayeredControllers wheelGroup)
 
     local wheelSpin = #(0.0, 0.0, 0.0, 0.0)
     local previousDistance = 0.0
@@ -885,39 +984,16 @@ fn vrigBakeAnimation profile splineNode rootNode bodyNode wheelNodes extraNodes 
                     )
                     wheelControllers[index][1].value = wheelControllers[index][3]
                     wheelControllers[index][2].value = \
-                        ((eulerAngles 0 (-wheelSpin[index]) steer) as quat) * wheelControllers[index][4]
+                        ((eulerAngles 0 0 steer) as quat) * wheelControllers[index][4]
+                    wheelGroupControllers[index][1].value = wheelGroupControllers[index][3]
+                    wheelGroupControllers[index][2].value = \
+                        ((eulerAngles 0 (-wheelSpin[index]) 0) as quat) * wheelGroupControllers[index][4]
                 )
             )
 
             previousDistance = travelled
             previousSpeed = speed
         )
-    )
-
-    -- Bind the vehicle only after a successful bake. Every node records its
-    -- original parent and transform first, so removal restores it exactly.
-    vrigRecordOriginalState rootNode
-    rootNode.parent = master
-
-    if bodyNode != rootNode do
-    (
-        vrigRecordOriginalState bodyNode
-        bodyNode.parent = body
-    )
-
-    for index = 1 to 4 do
-    (
-        if wheelNodes[index] != rootNode do
-        (
-            vrigRecordOriginalState wheelNodes[index]
-            wheelNodes[index].parent = wheels[index]
-        )
-    )
-
-    for extra in extraNodes where extra != undefined and extra != rootNode do
-    (
-        vrigRecordOriginalState extra
-        extra.parent = steering
     )
 
     local warning = ""
