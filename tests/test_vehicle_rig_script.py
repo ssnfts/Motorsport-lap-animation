@@ -211,6 +211,18 @@ def test_imported_vehicle_assembly_uses_wheel_centres_and_body_carrier(
         assert token in source
 
 
+def test_auto_assembly_infers_vehicle_facing_from_front_and_rear_wheels(
+    source: str,
+) -> None:
+    for token in (
+        "fn vrigForwardAxisFromWheels",
+        "frontCentre",
+        "rearCentre",
+        "forwardAxisList.selection = vrigForwardAxisFromWheels boundWheels",
+    ):
+        assert token in source
+
+
 def test_wheel_centres_use_evaluated_world_bounds_for_detached_meshes(
     source: str,
 ) -> None:
@@ -255,7 +267,8 @@ def test_wheel_spin_uses_generated_pivots_not_native_group_heads(
 
     assert "vrigLayeredControllers wheelGroup" not in source
     assert "((eulerAngles 0 0 steer) as quat)" in source
-    assert "((eulerAngles 0 (-wheelSpin[index]) 0) as quat)" in source
+    assert "fn vrigWheelSpinRotation" in source
+    assert "vrigWheelSpinRotation wheelSpin[index] forwardOffsetDeg" in source
 
 
 def test_remove_rig_ungroups_generated_import_groups_before_deleting_helpers(

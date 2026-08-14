@@ -649,6 +649,20 @@ fn vrigTopAssemblyNodes nodes =
     tops
 )
 
+-- Wheel labels provide a reliable forward direction for imported vehicles:
+-- FL/FR are averaged against RL/RR. The result is the dialog index for
+-- +X, -X, +Y, or -Y and remains editable by the artist.
+fn vrigForwardAxisFromWheels wheels =
+(
+    local frontCentre = (wheels[1].position + wheels[2].position) / 2.0
+    local rearCentre = (wheels[3].position + wheels[4].position) / 2.0
+    local forward = frontCentre - rearCentre
+    if (abs forward.x) >= (abs forward.y) then
+        (if forward.x >= 0.0 then 1 else 2)
+    else
+        (if forward.y >= 0.0 then 3 else 4)
+)
+
 fn vrigAssembleSelectedVehicle vehicleName =
 (
     local meshNodes = for node in selection where (superClassOf node == GeometryClass) collect node
@@ -798,6 +812,17 @@ fn vrigLayeredControllers node =
     rotationList.setActive 2
 
     #(positionList[1].controller, rotationList[1].controller, restPos, restRot)
+)
+
+-- Wheel spin is around the axle, which is perpendicular to the model's
+-- forward axis in the ground plane. +X/-X vehicles use Y axles; +Y/-Y
+-- vehicles (including the supplied Dodge) use X axles.
+fn vrigWheelSpinRotation degrees forwardOffsetDeg =
+(
+    if (abs forwardOffsetDeg) == 90.0 then
+        (eulerAngles (-degrees) 0 0) as quat
+    else
+        (eulerAngles 0 (-degrees) 0) as quat
 )
 
 -- Helpers are placed on the nodes they will drive, so the vehicle keeps its
@@ -995,7 +1020,7 @@ fn vrigBakeAnimation profile splineNode rootNode bodyNode wheelNodes extraNodes 
                         ((eulerAngles 0 0 steer) as quat) * wheelPivotControllers[index][4]
                     wheelSpinControllers[index][1].value = wheelSpinControllers[index][3]
                     wheelSpinControllers[index][2].value = \
-                        ((eulerAngles 0 (-wheelSpin[index]) 0) as quat) * wheelSpinControllers[index][4]
+                        (vrigWheelSpinRotation wheelSpin[index] forwardOffsetDeg) * wheelSpinControllers[index][4]
                 )
             )
 
@@ -1175,6 +1200,7 @@ rollout VehicleRigRollout "Create Vehicle Rig" width:360
             wheelFRLabel.text = boundWheels[2].name
             wheelRLLabel.text = boundWheels[3].name
             wheelRRLabel.text = boundWheels[4].name
+            forwardAxisList.selection = vrigForwardAxisFromWheels boundWheels
             report #(result[2], "Vehicle Root and all wheel clusters are bound. Pick an open spline, then run Preflight.")
             invalidateBake()
         )
