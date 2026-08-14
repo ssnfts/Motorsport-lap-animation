@@ -344,13 +344,18 @@ fn vrigSamplePath splineNode sampleCount scale =
 (
     local offset = splineNode.objecttransform
     local points = #()
-    for index = 0 to sampleCount do
+    -- lengthInterp can clamp its final interval before the actual last knot.
+    -- Sample the interpolated interior only, then append the exact endpoint.
+    for index = 0 to sampleCount - 1 do
     (
         local param = (index as float) / (sampleCount as float)
         local local_point = lengthInterp splineNode 1 param
         local world_point = local_point * offset
         append points [world_point.x / scale, world_point.y / scale, world_point.z / scale]
     )
+    local finalLocalPoint = getKnotPoint splineNode 1 (numKnots splineNode 1)
+    local finalWorldPoint = finalLocalPoint * offset
+    append points [finalWorldPoint.x / scale, finalWorldPoint.y / scale, finalWorldPoint.z / scale]
     points
 )
 
@@ -774,6 +779,7 @@ fn vrigBakeAnimation profile splineNode rootNode bodyNode wheelNodes extraNodes 
 
     local frameSpan = (endFrame - startFrame) as float
     if frameSpan <= 0.0 do return #(false, "End frame must be greater than start frame", 1.0)
+    animationRange = interval startFrame endFrame
     local availableSeconds = frameSpan / (frameRate as float)
     if availableSeconds <= 0.0 do return #(false, "Frame range is too short to bake", 1.0)
     if naturalDuration <= 0.0 do return #(false, "Path produced no usable motion", 1.0)

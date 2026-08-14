@@ -189,3 +189,12 @@ def test_script_declares_five_path_fixtures(source: str) -> None:
         "EXPECTED REJECT",
     ):
         assert name in source
+
+
+def test_spline_sampler_uses_the_actual_final_knot(source: str) -> None:
+    assert "for index = 0 to sampleCount - 1" in source
+    assert "getKnotPoint splineNode 1 (numKnots splineNode 1)" in source
+
+
+def test_bake_sets_the_requested_animation_range(source: str) -> None:
+    assert "animationRange = interval startFrame endFrame" in source
