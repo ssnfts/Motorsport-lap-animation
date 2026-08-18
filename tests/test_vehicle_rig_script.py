@@ -260,6 +260,27 @@ def test_wheel_centres_use_evaluated_world_bounds_for_detached_meshes(
     assert "nodeGetBoundingBox nodes[index] (matrix3 1)" in bounds_fn
 
 
+def test_bake_ground_aligns_imported_meshes_and_limits_suspension_compression(
+    source: str,
+) -> None:
+    for token in (
+        "fn vrigGeometryUnder",
+        "fn vrigBoundsMinZ",
+        "local vehicleFloorZ = vrigBoundsMinZ vehicleGeometry",
+        "local groundLift = -vehicleFloorZ",
+        "local suspensionDropLimit = amax 0.0 (bodyFloorZ - vehicleFloorZ)",
+        "local bodyHeave = amax (response[3] * scale) (-suspensionDropLimit)",
+        "masterControllers[1].value = worldPoint + [0, 0, groundLift]",
+        "local wheelFloorZ = vrigBoundsMinZ wheelBoundsNodes",
+        "local frameFloorZ = vrigBoundsMinZ vehicleBoundsNodes",
+        "local wheelBoundsNodes = vrigWheelGroupNodes wheelNodes",
+        "masterControllers[1].value = masterControllers[1].value + [0, 0, -frameFloorZ]",
+        "Controller writes above are evaluated by Max after their key context",
+        "bodyControllers[2].value = slerp bodyControllers[4] fullBodyRotation responseScale",
+    ):
+        assert token in source
+
+
 def test_source_nodes_are_bound_before_helper_keys_are_baked(source: str) -> None:
     binding = source.index("rootNode.parent = master")
     bake_loop = source.index("with animate on")

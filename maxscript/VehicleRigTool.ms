@@ -639,6 +639,28 @@ fn vrigBoundsCenter nodes =
     (low + high) / 2.0
 )
 
+-- Imported vehicles routinely have arbitrary object pivots and may arrive
+-- below Z=0. Evaluate their actual mesh bounds instead of trusting either a
+-- helper origin or a preset tyre diameter.
+fn vrigGeometryUnder root =
+(
+    local nodes = #()
+    for node in geometry where (node == root or vrigIsDescendantOf node root) do
+        append nodes node
+    nodes
+)
+
+fn vrigBoundsMinZ nodes =
+(
+    local low = (nodeGetBoundingBox nodes[1] (matrix3 1))[1].z
+    for index = 2 to nodes.count do
+    (
+        local bounds = nodeGetBoundingBox nodes[index] (matrix3 1)
+        low = amin low bounds[1].z
+    )
+    low
+)
+
 fn vrigTopAssemblyNode node =
 (
     local top = node
@@ -922,6 +944,22 @@ fn vrigBakeAnimation profile splineNode rootNode bodyNode wheelNodes extraNodes 
     -- relative speed variation intact.
     local timeScale = naturalDuration / availableSeconds
 
+    -- The path represents tyre contact level. Ground-align against the
+    -- lowest evaluated mesh in the complete imported assembly, because its
+    -- pivots and nominal tyre radius cannot be trusted. The same measurement
+    -- bounds compression so the chassis cannot be driven through that plane.
+    local vehicleGeometry = vrigGeometryUnder rootNode
+    if vehicleGeometry.count == 0 do return #(false, "Vehicle contains no geometry", 1.0)
+    local bodyGeometry = vrigGeometryUnder bodyNode
+    if bodyGeometry.count == 0 do return #(false, "Body contains no geometry", 1.0)
+    local wheelGeometry = #()
+    for wheelNode in wheelNodes do join wheelGeometry (vrigGeometryUnder wheelNode)
+    if wheelGeometry.count == 0 do return #(false, "Wheel assignments contain no geometry", 1.0)
+    local vehicleFloorZ = vrigBoundsMinZ vehicleGeometry
+    local bodyFloorZ = vrigBoundsMinZ bodyGeometry
+    local groundLift = -vehicleFloorZ
+    local suspensionDropLimit = amax 0.0 (bodyFloorZ - vehicleFloorZ)
+
     local helpers = vrigCreateHelpers profile rootNode bodyNode wheelNodes scale
     local master = helpers[1]
     local body = helpers[2]
@@ -956,6 +994,20 @@ fn vrigBakeAnimation profile splineNode rootNode bodyNode wheelNodes extraNodes 
         vrigRecordOriginalState extra
         extra.parent = steering
     )
+
+    -- Per-frame contact checks must remain responsive on imports containing
+    -- thousands of detached meshes. Auto assembly creates native body and
+    -- wheel groups, whose evaluated bounds cover the same geometry in five
+    -- queries instead of one query per source mesh.
+    local bodyBoundsNodes = #()
+    for child in bodyNode.children where isGroupHead child do append bodyBoundsNodes child
+    if bodyBoundsNodes.count == 0 do bodyBoundsNodes = bodyGeometry
+    local wheelBoundsNodes = vrigWheelGroupNodes wheelNodes
+    local wheelGroupsAvailable = true
+    for wheelBoundsNode in wheelBoundsNodes where not isGroupHead wheelBoundsNode do wheelGroupsAvailable = false
+    if not wheelGroupsAvailable do wheelBoundsNodes = wheelGeometry
+    local vehicleBoundsNodes = for bodyBoundsNode in bodyBoundsNodes collect bodyBoundsNode
+    join vehicleBoundsNodes wheelBoundsNodes
 
     local masterControllers = vrigLayeredControllers master
     local bodyControllers = vrigLayeredControllers body
@@ -998,6 +1050,7 @@ fn vrigBakeAnimation profile splineNode rootNode bodyNode wheelNodes extraNodes 
             local steerAngles = vrigAckermannAngles steerCentre profile.wheelbase profile.track profile.maxSteer
             local response = vrigBodyResponse profile longitudinal lateral \
                 rollIntensity accelIntensity brakeIntensity suspIntensity
+            local bodyHeave = amax (response[3] * scale) (-suspensionDropLimit)
 
             at time frame
             (
@@ -1005,12 +1058,12 @@ fn vrigBakeAnimation profile splineNode rootNode bodyNode wheelNodes extraNodes 
                 -- space, so it takes the sampled position and heading
                 -- directly. forwardOffsetDeg corrects for a vehicle that
                 -- was not modelled facing +X.
-                masterControllers[1].value = worldPoint
+                masterControllers[1].value = worldPoint + [0, 0, groundLift]
                 masterControllers[2].value = (eulerAngles 0 0 (yaw + forwardOffsetDeg)) as quat
 
                 -- Everything below is an offset from the helper's captured
                 -- rest pose, so the vehicle keeps its original layout.
-                bodyControllers[1].value = bodyControllers[3] + [0, 0, response[3] * scale]
+                bodyControllers[1].value = bodyControllers[3] + [0, 0, bodyHeave]
                 bodyControllers[2].value = \
                     ((eulerAngles response[1] response[2] 0) as quat) * bodyControllers[4]
 
@@ -1038,11 +1091,73 @@ fn vrigBakeAnimation profile splineNode rootNode bodyNode wheelNodes extraNodes 
                     wheelSpinControllers[index][2].value = \
                         (vrigWheelSpinRotation wheelSpin[index] forwardOffsetDeg) * wheelSpinControllers[index][4]
                 )
+
+                -- Imported meshes can have an arbitrary local up axis. Limit
+                -- the body response against the evaluated wheel contact
+                -- envelope before it can visually pass through the ground.
+                local wheelFloorZ = vrigBoundsMinZ wheelBoundsNodes
+                local bodyFloorZAtFrame = vrigBoundsMinZ bodyBoundsNodes
+                if bodyFloorZAtFrame < wheelFloorZ do
+                (
+                    local low = 0.0
+                    local high = 1.0
+                    for iteration = 1 to 5 do
+                    (
+                        local responseScale = (low + high) / 2.0
+                        bodyControllers[1].value = bodyControllers[3] + [0, 0, bodyHeave * responseScale]
+                        bodyControllers[2].value = \
+                            ((eulerAngles (response[1] * responseScale) (response[2] * responseScale) 0) as quat) * bodyControllers[4]
+                        if (vrigBoundsMinZ bodyBoundsNodes) < wheelFloorZ then high = responseScale else low = responseScale
+                    )
+                    bodyControllers[1].value = bodyControllers[3] + [0, 0, bodyHeave * low]
+                    bodyControllers[2].value = \
+                        ((eulerAngles (response[1] * low) (response[2] * low) 0) as quat) * bodyControllers[4]
+                )
+
+                -- Correct from evaluated geometry, after steering, wheel
+                -- spin, and body response. This makes each tyre's lowest
+                -- point the path contact plane even for imports with offset
+                -- pivots or a non-standard source axis.
+                local frameFloorZ = vrigBoundsMinZ vehicleBoundsNodes
+                masterControllers[1].value = masterControllers[1].value + [0, 0, -frameFloorZ]
             )
 
             previousDistance = travelled
             previousSpeed = speed
             previousYaw = yaw
+        )
+    )
+
+    -- Controller writes above are evaluated by Max after their key context
+    -- closes. Resolve contact in a second pass so the test always sees the
+    -- completed mesh pose, rather than stale bounds from the previous key.
+    with animate on
+    (
+        for frame = startFrame to endFrame do at time frame
+        (
+            forceCompleteRedraw()
+            local wheelFloorZ = vrigBoundsMinZ wheelBoundsNodes
+            local bodyFloorZAtFrame = vrigBoundsMinZ bodyBoundsNodes
+            if bodyFloorZAtFrame < wheelFloorZ do
+            (
+                local fullBodyPosition = bodyControllers[1].value
+                local fullBodyRotation = bodyControllers[2].value
+                local low = 0.0
+                local high = 1.0
+                for iteration = 1 to 5 do
+                (
+                    local responseScale = (low + high) / 2.0
+                    bodyControllers[1].value = bodyControllers[3] + ((fullBodyPosition - bodyControllers[3]) * responseScale)
+                    bodyControllers[2].value = slerp bodyControllers[4] fullBodyRotation responseScale
+                    forceCompleteRedraw()
+                    if (vrigBoundsMinZ bodyBoundsNodes) < wheelFloorZ then high = responseScale else low = responseScale
+                )
+                bodyControllers[1].value = bodyControllers[3] + ((fullBodyPosition - bodyControllers[3]) * low)
+                bodyControllers[2].value = slerp bodyControllers[4] fullBodyRotation low
+                forceCompleteRedraw()
+            )
+            local frameFloorZ = vrigBoundsMinZ vehicleBoundsNodes
+            masterControllers[1].value = masterControllers[1].value + [0, 0, -frameFloorZ]
         )
     )
 
