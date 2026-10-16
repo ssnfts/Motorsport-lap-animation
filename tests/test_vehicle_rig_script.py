@@ -45,6 +45,21 @@ def source() -> str:
     return SCRIPT.read_text(encoding="utf-8")
 
 
+@pytest.fixture(scope="module")
+def code(source: str) -> str:
+    """The script with comments and string literals blanked out."""
+
+    without_blocks = re.sub(r"/\*.*?\*/", "", source, flags=re.S)
+    without_lines = re.sub(r"--[^\n]*", "", without_blocks)
+    return re.sub(r'"[^"\n]*"', '""', without_lines)
+
+
+def _function(source: str, name: str) -> str:
+    start = source.index(f"fn {name} ")
+    following = re.search(r"\n(fn |rollout )", source[start + 1:])
+    return source[start:start + 1 + following.start()] if following else source[start:]
+
+
 def _parse_presets(source: str) -> dict[str, dict[str, object]]:
     presets: dict[str, dict[str, object]] = {}
     for line in source.splitlines():
@@ -58,6 +73,16 @@ def _parse_presets(source: str) -> dict[str, dict[str, object]]:
             fields[key] = text if number == "" else float(number)
         presets[str(fields["name"])] = fields
     return presets
+
+
+def _axis_table(source: str, name: str) -> dict[int, tuple[float, float, float]]:
+    body = _function(source, name)
+    table = {}
+    for index, component, sign in re.findall(r"(\d):\s*#\((\d),\s*(-?\d+\.\d+)\)", body):
+        vector = [0.0, 0.0, 0.0]
+        vector[int(component) - 1] = float(sign)
+        table[int(index)] = tuple(vector)
+    return table
 
 
 def test_maxscript_exposes_required_safety_actions(source: str) -> None:
@@ -148,8 +173,21 @@ MAXSCRIPT_KEYWORDS = frozenset(
 def test_script_never_uses_a_maxscript_keyword_as_an_identifier(source: str) -> None:
     declarations = re.findall(r"\blocal\s+([A-Za-z_]\w*)", source)
     declarations += re.findall(r"\bfn\s+([A-Za-z_]\w*)", source)
+    declarations += re.findall(r"\bfor\s+([A-Za-z_]\w*)\s+(?:in|=)", source)
     clashes = sorted({name for name in declarations if name in MAXSCRIPT_KEYWORDS})
     assert not clashes, f"reserved MaxScript words used as identifiers: {clashes}"
+
+
+def test_no_function_is_used_before_it_is_defined(code: str) -> None:
+    # Max binds names when it compiles a function. A call to a function that
+    # is defined further down the file compiles to an undefined variable and
+    # fails at run time with "Call needs function or class, got: undefined".
+    early = []
+    for definition in re.finditer(r"\bfn\s+(\w+)", code):
+        name = definition.group(1)
+        if re.search(rf"\b{name}\b", code).start() < definition.start(1):
+            early.append(name)
+    assert not early, f"used before definition: {early}"
 
 
 def test_preflight_reports_every_python_issue_code(source: str) -> None:
@@ -162,6 +200,159 @@ def test_preflight_reports_every_python_issue_code(source: str) -> None:
         "steering_limit",
     ):
         assert code in source
+
+
+def test_preflight_reports_knot_errors_by_knot_number(source: str) -> None:
+    preflight = _function(source, "vrigPreflightPath")
+    assert "vrigPreflightOpenPath knotPoints profile" in preflight
+    assert '" at knot "' in _function(source, "vrigFormatIssues")
+
+
+def test_spline_sampler_follows_the_drawn_curve(source: str, code: str) -> None:
+    # lengthInterp returns repeated, polyline-snapped points on 3ds Max 2027;
+    # the sampler evaluates each bezier segment from its knots and handles.
+    sampler = _function(source, "vrigSamplePath")
+    for token in ("getKnotPoint", "getOutVec", "getInVec", "vrigBezierPoint"):
+        assert token in sampler
+    assert "lengthInterp" not in code
+
+
+def test_heading_comes_from_both_axles_standing_on_the_path(source: str) -> None:
+    pose = _function(source, "vrigAxlePose")
+    assert "travelled - wheelbase / 2.0" in pose
+    assert "travelled + wheelbase / 2.0" in pose
+    bake = _function(source, "vrigBakeAnimation")
+    assert "vrigAxlePose path travelled profile.wheelbase" in bake
+    # Integrated and clamped yaw drifted away from the path at corner knots.
+    assert "vrigYawDeltaDegrees" not in source
+    assert "maxYawStep" not in source
+
+
+def test_rotations_are_written_to_euler_tracks_not_quaternions(source: str) -> None:
+    # A quaternion written per frame wraps at 180 degrees, so a spinning
+    # wheel or a heading through south flips backwards between keys.
+    bake = _function(source, "vrigBakeAnimation")
+    assert "as quat" not in bake
+    assert "vrigSetEulerAxis" in bake
+    setter = _function(source, "vrigSetEulerAxis")
+    for track in ("x_rotation", "y_rotation", "z_rotation"):
+        assert track in setter
+    assert "vrigUnwrapDegrees yaw previousYaw" in bake
+
+
+def test_vehicle_axes_follow_the_measured_facing(source: str) -> None:
+    forward = _axis_table(source, "vrigForwardAxis")
+    left = _axis_table(source, "vrigLeftAxis")
+    expected_forward = {
+        1: (1.0, 0.0, 0.0),
+        2: (-1.0, 0.0, 0.0),
+        3: (0.0, 1.0, 0.0),
+        4: (0.0, -1.0, 0.0),
+    }
+    assert forward == expected_forward
+    for index, (fx, fy, fz) in expected_forward.items():
+        # left = up x forward; positive rotation about it rolls a wheel forward.
+        up_cross_forward = (0.0 * fz - 1.0 * fy, 1.0 * fx - 0.0 * fz, 0.0)
+        assert left[index] == pytest.approx(up_cross_forward)
+
+
+def test_wheels_spin_about_the_left_axis_and_steer_about_up(source: str) -> None:
+    bake = _function(source, "vrigBakeAnimation")
+    assert "vrigSetEulerAxis spinControllers[index][2] leftAxis[1] (leftAxis[2] * wheelSpin[index])" in bake
+    assert "vrigSetEulerAxis pivotControllers[1][2] 3 steerLeft" in bake
+    assert "vrigSetEulerAxis pivotControllers[2][2] 3 steerRight" in bake
+    assert "rolled / profile.tyreRadius" in bake
+
+
+def test_body_rolls_outward_and_pitches_nose_up_under_power(source: str) -> None:
+    bake = _function(source, "vrigBakeAnimation")
+    assert "forwardAxis[1] (-1.0 * forwardAxis[2] * roll)" in bake
+    assert "leftAxis[1] (-1.0 * leftAxis[2] * pitch)" in bake
+    assert "vrigSuspensionStep" in bake
+
+
+def test_suspension_mirrors_the_python_spring_damper(source: str) -> None:
+    step = _function(source, "vrigSuspensionStep")
+    assert "ceil (dt * omega * 4.0)" in step
+    assert "omega * omega * (target - value) - 2.0 * dampingRatio * omega * velocity" in step
+
+
+def test_vehicle_is_measured_from_evaluated_geometry(source: str) -> None:
+    measure = _function(source, "vrigMeasureVehicle")
+    assert "vrigGeometryUnder wheelNodes[index]" in measure
+    assert "vrigWorldBounds" in measure
+    assert "(bounds[2].z - bounds[1].z) / 2.0" in measure
+    assert "nodeGetBoundingBox node (matrix3 1)" in _function(source, "vrigWorldBounds")
+
+
+def test_helpers_sit_at_measured_points_with_world_axes(source: str) -> None:
+    helpers = _function(source, "vrigCreateHelpers")
+    assert "transMatrix measure.wheelCentres[index]" in helpers
+    assert "measure.groundCentre" in helpers
+    # Copying a source node's transform placed pivots wherever the import's
+    # object pivot happened to be.
+    assert ".transform = wheelNodes" not in source
+    assert ".transform = bodyNode" not in source
+
+
+def test_scale_is_fitted_only_when_scene_units_are_implausible(source: str) -> None:
+    fit = _function(source, "vrigSuggestedScale")
+    assert "wheelbaseMetres >= 1.5 and wheelbaseMetres <= 10.0" in fit
+    assert "measure.wheelbase / presetWheelbase" in fit
+
+
+def test_bake_uses_measured_facing_unless_overridden(source: str) -> None:
+    bake = _function(source, "vrigBakeAnimation")
+    assert "if settings.forwardIndex == undefined then measure.forwardIndex" in bake
+    assert "forwardOverride" in source
+
+
+def test_frame_range_can_match_the_drive_time(source: str) -> None:
+    assert "Match frame range to drive time" in source
+    assert "if settings.matchDriveTime do" in _function(source, "vrigBakeAnimation")
+
+
+def test_bake_sets_the_requested_animation_range(source: str) -> None:
+    assert "animationRange = interval startFrame endFrame" in source
+
+
+def test_source_nodes_are_bound_before_helper_keys_are_baked(source: str) -> None:
+    bake = _function(source, "vrigBakeAnimation")
+    assert bake.index("rootNode.parent = master") < bake.index("with animate on")
+
+
+def test_a_second_bake_replaces_the_first(source: str) -> None:
+    bake = _function(source, "vrigBakeAnimation")
+    assert bake.index("vrigUnbake()") < bake.index("vrigMeasureVehicle")
+
+
+def test_bake_and_assembly_keep_separate_restore_records(source: str) -> None:
+    keys = _function(source, "vrigRecordKeys")
+    assert '"VRIG_baked"' in keys and '"VRIG_bound"' in keys
+    record = _function(source, "vrigRecordOriginalState")
+    # A record is written once; re-binding must not replace the original.
+    assert "if (getUserProp node keys[1]) != undefined then false" in record
+    assert 'vrigRestoreOriginalStates "bake"' in _function(source, "vrigUnbake")
+
+
+def test_restore_relinks_parents_by_handle(source: str) -> None:
+    assert "originalParent.inode.handle" in _function(source, "vrigRecordOriginalState")
+    assert "maxOps.getNodeByHandle handle" in _function(source, "vrigRecordedParent")
+
+
+def test_restore_unlinks_every_node_before_restoring_transforms(source: str) -> None:
+    restore = _function(source, "vrigRestoreOriginalStates")
+    unlink = restore.index("for node in records do node.parent = undefined")
+    assert unlink < restore.index(".transform = restored")
+    assert "deleteUserProp node key" in restore
+
+
+def test_remove_rig_ungroups_generated_import_groups_before_restoring(source: str) -> None:
+    cleanup = _function(source, "vrigRemoveGeneratedRig")
+    assert "vrigGeneratedGroupHeads" in cleanup
+    assert "ungroup groupHead" in cleanup
+    assert cleanup.index("vrigUnbake()") < cleanup.index("ungroup groupHead")
+    assert cleanup.index("ungroup groupHead") < cleanup.index('vrigRestoreOriginalStates "assembly"')
 
 
 def test_script_exposes_non_destructive_import_assembly(source: str) -> None:
@@ -177,6 +368,31 @@ def test_script_exposes_non_destructive_import_assembly(source: str) -> None:
         assert token in source
 
 
+def test_imported_vehicle_assembly_uses_native_groups(source: str) -> None:
+    assembly = _function(source, "vrigAssembleSelectedVehicle")
+    for token in (
+        "group bodySet name:",
+        "_BodyGroup",
+        "_WheelGroup_",
+        "bodyGroup.parent = bodyCarrier",
+        "wheelGroup.parent = wheel",
+    ):
+        assert token in assembly
+
+
+def test_brake_parts_steer_without_spinning(source: str) -> None:
+    brake = _function(source, "vrigIsBrakePart")
+    assert '"caliper"' in brake and '"brake"' in brake
+    assert "brake.parent = wheelPivots[index]" in _function(source, "vrigBakeAnimation")
+
+
+def test_assembly_refuses_an_imported_parent_shared_between_clusters(source: str) -> None:
+    assembly = _function(source, "vrigAssembleSelectedVehicle")
+    assert "Detach or ungroup them before assembly." in assembly
+    # Every failure after mutation rolls the scene back.
+    assert assembly.count("vrigRemoveGeneratedRig()") >= 3
+
+
 def test_script_declares_five_path_fixtures(source: str) -> None:
     for name in (
         "VRIG_Test_Simple",
@@ -189,143 +405,7 @@ def test_script_declares_five_path_fixtures(source: str) -> None:
         assert name in source
 
 
-def test_spline_sampler_uses_the_actual_final_knot(source: str) -> None:
-    assert "for index = 0 to sampleCount - 1" in source
-    assert "getKnotPoint splineNode 1 (numKnots splineNode 1)" in source
-
-
-def test_bake_sets_the_requested_animation_range(source: str) -> None:
-    assert "animationRange = interval startFrame endFrame" in source
-
-
-def test_bake_integrates_curvature_for_continuous_heading(source: str) -> None:
-    for token in (
-        "fn vrigYawDeltaDegrees",
-        "local previousYaw = vrigHeadingAtDistance points distances 0.0",
-        "local rawYawStep = vrigYawDeltaDegrees curvature travelStep",
-        "local yaw = previousYaw + yawStep",
-        "previousYaw = yaw",
-    ):
-        assert token in source
-
-
-def test_bake_caps_per_frame_yaw_for_unrideable_corner_knots(source: str) -> None:
-    for token in (
-        "local maxYawStep = 12.0",
-        "local yawStep = vrigClamp rawYawStep maxYawStep",
-        "local yaw = previousYaw + yawStep",
-    ):
-        assert token in source
-
-
-def test_bake_reports_when_sharp_corner_yaw_is_limited(source: str) -> None:
-    for token in (
-        "local yawLimited = false",
-        "if (abs (yawStep - rawYawStep)) > 1e-6 do yawLimited = true",
-        "Sharp spline corner was yaw-limited",
-    ):
-        assert token in source
-
-
-def test_imported_vehicle_assembly_uses_wheel_centres_and_body_carrier(
-    source: str,
-) -> None:
-    for token in (
-        "vrigBoundsCenter",
-        "nodeGetBoundingBox",
-        "_BodyCarrier",
-        "bodyCarrier.parent = root",
-        "wheel.position = vrigBoundsCenter wheelSets[wheelIndex]",
-    ):
-        assert token in source
-
-
-def test_auto_assembly_infers_vehicle_facing_from_front_and_rear_wheels(
-    source: str,
-) -> None:
-    for token in (
-        "fn vrigForwardAxisFromWheels",
-        "frontCentre",
-        "rearCentre",
-        "forwardAxisList.selection = vrigForwardAxisFromWheels boundWheels",
-    ):
-        assert token in source
-
-
-def test_wheel_centres_use_evaluated_world_bounds_for_detached_meshes(
-    source: str,
-) -> None:
-    bounds_fn = source[source.index("fn vrigBoundsCenter"):source.index("fn vrigTopAssemblyNode")]
-    assert "nodeGetBoundingBox nodes[1] (matrix3 1)" in bounds_fn
-    assert "nodeGetBoundingBox nodes[index] (matrix3 1)" in bounds_fn
-
-
-def test_bake_ground_aligns_imported_meshes_and_limits_suspension_compression(
-    source: str,
-) -> None:
-    for token in (
-        "fn vrigGeometryUnder",
-        "fn vrigBoundsMinZ",
-        "local vehicleFloorZ = vrigBoundsMinZ vehicleGeometry",
-        "local groundLift = -vehicleFloorZ",
-        "local suspensionDropLimit = amax 0.0 (bodyFloorZ - vehicleFloorZ)",
-        "local bodyHeave = amax (response[3] * scale) (-suspensionDropLimit)",
-        "masterControllers[1].value = worldPoint + [0, 0, groundLift]",
-        "local wheelFloorZ = vrigBoundsMinZ wheelBoundsNodes",
-        "local frameFloorZ = vrigBoundsMinZ vehicleBoundsNodes",
-        "local wheelBoundsNodes = vrigWheelGroupNodes wheelNodes",
-        "masterControllers[1].value = masterControllers[1].value + [0, 0, -frameFloorZ]",
-        "Controller writes above are evaluated by Max after their key context",
-        "bodyControllers[2].value = slerp bodyControllers[4] fullBodyRotation responseScale",
-    ):
-        assert token in source
-
-
-def test_source_nodes_are_bound_before_helper_keys_are_baked(source: str) -> None:
-    binding = source.index("rootNode.parent = master")
-    bake_loop = source.index("with animate on")
-    assert binding < bake_loop
-
-
-def test_imported_vehicle_assembly_uses_native_groups_for_offset_pivot_meshes(
-    source: str,
-) -> None:
-    for token in (
-        "group selection name:",
-        "_BodyGroup",
-        "WheelGroup_",
-        "bodyGroup.parent = bodyCarrier",
-        "wheelGroup.parent = wheels[wheelIndex]",
-    ):
-        assert token in source
-
-
-def test_wheel_spin_uses_generated_pivots_not_native_group_heads(
-    source: str,
-) -> None:
-    for token in (
-        "VRIG_WheelPivot_",
-        "VRIG_WheelSpin_",
-        "local wheelPivots = #()",
-        "local wheelSpins = #()",
-        "local wheelPivotControllers = for wheelPivot in wheelPivots collect (vrigLayeredControllers wheelPivot)",
-        "local wheelSpinControllers = for wheelSpinNode in wheelSpins collect (vrigLayeredControllers wheelSpinNode)",
-        "wheelPivotControllers[index][2].value",
-        "wheelSpinControllers[index][2].value",
-    ):
-        assert token in source
-
-    assert "vrigLayeredControllers wheelGroup" not in source
-    assert "((eulerAngles 0 0 steer) as quat)" in source
-    assert "fn vrigWheelSpinRotation" in source
-    assert "vrigWheelSpinRotation wheelSpin[index] forwardOffsetDeg" in source
-
-
-def test_remove_rig_ungroups_generated_import_groups_before_deleting_helpers(
-    source: str,
-) -> None:
-    cleanup = source[source.index("fn vrigRemoveGeneratedRig"):source.index("/* ------------------------------------------------------------------ *\n * Rig construction")]
-    assert "vrigGeneratedGroupHeads" in cleanup
-    assert "ungroup groupHead" in cleanup
-    assert cleanup.index("ungroup groupHead") < cleanup.index("vrigRestoreOriginalState")
-    assert 'deleteUserProp node "VRIG_bound"' in source
+def test_path_fixtures_are_laid_out_in_metres_from_the_vehicle(source: str) -> None:
+    fixtures = _function(source, "vrigCreateTestPaths")
+    assert "fn vrigCreateTestPaths origin forwardIndex scale" in fixtures
+    assert "* scale" in fixtures
