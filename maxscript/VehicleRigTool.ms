@@ -22,7 +22,8 @@
 struct VehicleRigProfile
 (
     name, wheelbase, track, tyreRadius, topSpeed, acceleration, braking,
-    lateralGrip, maxSteer, springTravel, dampingRatio, maxRoll, maxPitch
+    lateralGrip, maxSteer, springTravel, dampingRatio, maxRoll, maxPitch,
+    rollGradient, squatGradient, diveGradient, rideFrequency, understeer, steeringRatio
 )
 
 struct VehicleRigIssue (code, severity, message, index)
@@ -31,7 +32,11 @@ struct VehicleRigIssue (code, severity, message, index)
 -- axle beyond either end.
 struct VehicleRigPath (points, distances, startDir, endDir, length)
 
-struct VehicleRigMotion (path, yaws, curvatures, speeds, times, duration)
+-- slopes are nose-up degrees; verticalCurvatures are positive in a dip.
+struct VehicleRigMotion
+(
+    path, yaws, curvatures, slopes, verticalCurvatures, speeds, times, duration
+)
 
 -- Measured in scene units from the vehicle's evaluated meshes.
 struct VehicleRigMeasure
@@ -40,14 +45,25 @@ struct VehicleRigMeasure
     forwardIndex, bodyCentre, axleZ, length
 )
 
+-- How far the body may move before the model's own wheel arches meet the
+-- tyres. compression and archGaps are per wheel in scene units; the turn
+-- limits are the steering angles each front wheel can reach, as
+-- #(inner, outer) for a left and a right turn.
+struct VehicleRigClearance
+(
+    compression, archGaps, leftTurnLimits, rightTurnLimits, ignored, seconds
+)
+
 -- forwardIndex left undefined takes the facing measured from the wheels
--- at rest; set it only to override that measurement.
+-- at rest; set it only to override that measurement. gripUsage is the
+-- share of the tyres' grip the driver uses.
 struct VehicleRigBakeSettings
 (
-    profile, splineNode, rootNode, bodyNode, wheelNodes,
+    profile, splineNode, rootNode, bodyNode, wheelNodes, steeringWheelNode,
     startFrame = 0, endFrame = 100, reversed = false, targetSpeed = 30.0,
     rollIntensity = 1.0, accelIntensity = 1.0, brakeIntensity = 1.0, suspIntensity = 1.0,
-    sampleCount = 256, scale = 1.0, forwardIndex = undefined, matchDriveTime = true
+    sampleCount = 256, scale = 1.0, forwardIndex = undefined, matchDriveTime = true,
+    gripUsage = 0.55, settleSeconds = 1.2
 )
 
 /* ------------------------------------------------------------------ *
@@ -58,11 +74,11 @@ struct VehicleRigBakeSettings
 fn vrigPresets =
 (
     #(
-        VehicleRigProfile name:"car" wheelbase:2.70 track:1.55 tyreRadius:0.31 topSpeed:70.0 acceleration:5.5 braking:9.0 lateralGrip:1.00 maxSteer:35.0 springTravel:0.12 dampingRatio:0.70 maxRoll:6.0 maxPitch:4.0,
-        VehicleRigProfile name:"suv" wheelbase:2.85 track:1.65 tyreRadius:0.36 topSpeed:55.0 acceleration:4.0 braking:8.0 lateralGrip:0.85 maxSteer:32.0 springTravel:0.18 dampingRatio:0.75 maxRoll:9.0 maxPitch:5.0,
-        VehicleRigProfile name:"pickup" wheelbase:3.20 track:1.72 tyreRadius:0.38 topSpeed:48.0 acceleration:3.2 braking:7.0 lateralGrip:0.75 maxSteer:30.0 springTravel:0.20 dampingRatio:0.80 maxRoll:10.0 maxPitch:5.5,
-        VehicleRigProfile name:"van" wheelbase:3.10 track:1.70 tyreRadius:0.35 topSpeed:42.0 acceleration:3.0 braking:6.5 lateralGrip:0.70 maxSteer:28.0 springTravel:0.18 dampingRatio:0.80 maxRoll:10.0 maxPitch:5.0,
-        VehicleRigProfile name:"bus" wheelbase:6.00 track:2.35 tyreRadius:0.49 topSpeed:30.0 acceleration:1.5 braking:5.0 lateralGrip:0.55 maxSteer:24.0 springTravel:0.16 dampingRatio:0.85 maxRoll:7.0 maxPitch:3.5
+        VehicleRigProfile name:"car" wheelbase:2.70 track:1.55 tyreRadius:0.31 topSpeed:70.0 acceleration:5.5 braking:9.0 lateralGrip:1.00 maxSteer:35.0 springTravel:0.12 dampingRatio:0.70 maxRoll:6.0 maxPitch:4.0 rollGradient:3.5 squatGradient:1.5 diveGradient:2.0 rideFrequency:1.4 understeer:1.5 steeringRatio:15.0,
+        VehicleRigProfile name:"suv" wheelbase:2.85 track:1.65 tyreRadius:0.36 topSpeed:55.0 acceleration:4.0 braking:8.0 lateralGrip:0.85 maxSteer:32.0 springTravel:0.18 dampingRatio:0.75 maxRoll:9.0 maxPitch:5.0 rollGradient:5.5 squatGradient:2.0 diveGradient:2.5 rideFrequency:1.2 understeer:2.5 steeringRatio:16.0,
+        VehicleRigProfile name:"pickup" wheelbase:3.20 track:1.72 tyreRadius:0.38 topSpeed:48.0 acceleration:3.2 braking:7.0 lateralGrip:0.75 maxSteer:30.0 springTravel:0.20 dampingRatio:0.80 maxRoll:10.0 maxPitch:5.5 rollGradient:6.0 squatGradient:2.5 diveGradient:3.0 rideFrequency:1.2 understeer:3.0 steeringRatio:18.0,
+        VehicleRigProfile name:"van" wheelbase:3.10 track:1.70 tyreRadius:0.35 topSpeed:42.0 acceleration:3.0 braking:6.5 lateralGrip:0.70 maxSteer:28.0 springTravel:0.18 dampingRatio:0.80 maxRoll:10.0 maxPitch:5.0 rollGradient:6.0 squatGradient:2.0 diveGradient:2.5 rideFrequency:1.2 understeer:3.0 steeringRatio:17.0,
+        VehicleRigProfile name:"bus" wheelbase:6.00 track:2.35 tyreRadius:0.49 topSpeed:30.0 acceleration:1.5 braking:5.0 lateralGrip:0.55 maxSteer:24.0 springTravel:0.16 dampingRatio:0.85 maxRoll:7.0 maxPitch:3.5 rollGradient:7.0 squatGradient:1.5 diveGradient:2.0 rideFrequency:1.0 understeer:3.5 steeringRatio:20.0
     )
 )
 
@@ -85,7 +101,10 @@ fn vrigCopyProfile profile =
         acceleration:profile.acceleration braking:profile.braking \
         lateralGrip:profile.lateralGrip maxSteer:profile.maxSteer \
         springTravel:profile.springTravel dampingRatio:profile.dampingRatio \
-        maxRoll:profile.maxRoll maxPitch:profile.maxPitch
+        maxRoll:profile.maxRoll maxPitch:profile.maxPitch \
+        rollGradient:profile.rollGradient squatGradient:profile.squatGradient \
+        diveGradient:profile.diveGradient rideFrequency:profile.rideFrequency \
+        understeer:profile.understeer steeringRatio:profile.steeringRatio
 )
 
 /* ------------------------------------------------------------------ *
@@ -133,7 +152,9 @@ fn vrigValidateProfile profile =
         #("acceleration", profile.acceleration), #("braking", profile.braking),
         #("lateral grip", profile.lateralGrip), #("max steer", profile.maxSteer),
         #("spring travel", profile.springTravel), #("max roll", profile.maxRoll),
-        #("max pitch", profile.maxPitch)
+        #("max pitch", profile.maxPitch), #("roll gradient", profile.rollGradient),
+        #("squat gradient", profile.squatGradient), #("dive gradient", profile.diveGradient),
+        #("ride frequency", profile.rideFrequency), #("steering ratio", profile.steeringRatio)
     )
     for entry in positives do
     (
@@ -146,6 +167,10 @@ fn vrigValidateProfile profile =
         append errors "damping ratio must be a finite number"
     else if profile.dampingRatio < 0.0 or profile.dampingRatio > 1.0 do
         append errors "damping ratio must be between zero and one"
+    if not (vrigIsFinite profile.understeer) then
+        append errors "understeer must be a finite number"
+    else if profile.understeer < 0.0 do
+        append errors "understeer must not be negative"
     errors
 )
 
@@ -171,20 +196,63 @@ fn vrigAckermannAngles steeringDeg wheelbase track maxSteer =
     )
 )
 
+-- Centre front-wheel angle for a turn, left positive; mirrors
+-- vehicle_dynamics.steering_angle_deg. Understeer adds lock as the
+-- cornering load rises, so a fast corner shows more than a slow one.
+fn vrigSteeringAngle curvature speed profile =
+(
+    local geometric = atan (profile.wheelbase * curvature)
+    local extra = profile.understeer * speed * speed * (abs curvature) / (vrigGravity())
+    if curvature < 0.0 do extra = -extra
+    vrigClamp (geometric + extra) profile.maxSteer
+)
+
+fn vrigAckermannFits angle profile innerLimit outerLimit =
+(
+    local angles = vrigAckermannAngles angle profile.wheelbase profile.track 90.0
+    angles[1] <= innerLimit and angles[2] <= outerLimit
+)
+
+-- Largest centre angle whose Ackermann inner and outer wheel angles stay
+-- within the clearance; mirrors vehicle_dynamics.max_centre_steer_deg.
+fn vrigMaxCentreSteer profile innerLimit outerLimit =
+(
+    local ceiling = profile.maxSteer
+    if innerLimit <= 0.0 or outerLimit <= 0.0 then 0.0
+    else if vrigAckermannFits ceiling profile innerLimit outerLimit then ceiling
+    else
+    (
+        local low = 0.0
+        local high = ceiling
+        for iteration = 1 to 40 do
+        (
+            local middle = (low + high) / 2.0
+            if vrigAckermannFits middle profile innerLimit outerLimit then low = middle else high = middle
+        )
+        low
+    )
+)
+
 fn vrigWheelRotationDegrees distance tyreRadius =
 (
     if tyreRadius <= 0.0 then 0.0 else radToDeg (distance / tyreRadius)
 )
 
-fn vrigBodyResponse profile longitudinal lateral rollIntensity accelIntensity brakeIntensity suspIntensity =
+-- The pose the chassis settles to; mirrors vehicle_dynamics.body_response.
+-- Roll and pitch follow per-g gradients. Weight transfer moves load between
+-- wheels rather than adding to it, so heave comes only from `vertical`,
+-- the road's upward acceleration through a dip (positive) or over a crest.
+-- Returns #(roll, pitch, heave): roll negative leans right, pitch is
+-- nose-up, heave in metres.
+fn vrigBodyResponse profile longitudinal lateral vertical rollIntensity accelIntensity brakeIntensity suspIntensity =
 (
-    local lateralLimit = (vrigGravity()) * profile.lateralGrip
-    local roll = vrigClamp (-lateral / lateralLimit * profile.maxRoll * rollIntensity) profile.maxRoll
-    local longLimit = if longitudinal >= 0.0 then profile.acceleration else profile.braking
-    local longIntensity = if longitudinal >= 0.0 then accelIntensity else brakeIntensity
-    local pitch = vrigClamp (longitudinal / longLimit * profile.maxPitch * longIntensity) profile.maxPitch
-    local loadRatio = amin 1.0 (sqrt ((vrigSquare (longitudinal / longLimit)) + (vrigSquare (lateral / lateralLimit))))
-    local heave = -loadRatio * profile.springTravel * suspIntensity
+    local g = vrigGravity()
+    local roll = vrigClamp (-lateral / g * profile.rollGradient * rollIntensity) profile.maxRoll
+    local gradient = if longitudinal >= 0.0 then profile.squatGradient else profile.diveGradient
+    local share = if longitudinal >= 0.0 then accelIntensity else brakeIntensity
+    local pitch = vrigClamp (longitudinal / g * gradient * share) profile.maxPitch
+    local omega = 2.0 * pi * profile.rideFrequency
+    local heave = vrigClamp (-vertical / (omega * omega) * suspIntensity) profile.springTravel
     #(roll, pitch, heave)
 )
 
@@ -519,32 +587,40 @@ fn vrigUnwrapDegrees value reference =
  * Motion plan: two-pass grip-limited speed profile
  * ------------------------------------------------------------------ */
 
-fn vrigSpeedProfile points distances curvatures profile targetSpeed =
+-- Longitudinal acceleration left over once cornering has taken its share
+-- of the grip (the friction circle).
+fn vrigLongitudinalAvailable limit speed curvature lateralLimit =
 (
-    local count = points.count
-    local ceiling = amin targetSpeed profile.topSpeed
-    local speeds = #()
-    for index = 1 to count do
-    (
-        local radius = if (abs curvatures[index]) <= 1e-9 then 1e9 else (1.0 / (abs curvatures[index]))
-        append speeds (amin ceiling (vrigCurveSpeedLimit radius profile))
-    )
+    local usage = amin 1.0 (speed * speed * (abs curvature) / lateralLimit)
+    limit * (sqrt (amax 0.0 (1.0 - usage * usage)))
+)
 
-    -- The vehicle starts and finishes at rest.
+-- Speeds from rest to rest; mirrors vehicle_dynamics.plan_speed_profile.
+-- gripUsage is the share of the tyres' grip the driver uses. Braking and
+-- acceleration share it with cornering, and drive tapers with speed.
+fn vrigSpeedProfile distances curvatures profile targetSpeed gripUsage =
+(
+    local count = distances.count
+    local lateralLimit = gripUsage * profile.lateralGrip * (vrigGravity())
+    local ceiling = amin targetSpeed profile.topSpeed
+    local speeds = for curvature in curvatures collect \
+        (if (abs curvature) <= 1e-9 then ceiling else (amin ceiling (sqrt (lateralLimit / (abs curvature)))))
     speeds[1] = 0.0
     speeds[count] = 0.0
-
     for index = 2 to count do
     (
+        local speed = speeds[index - 1]
+        local drive = gripUsage * profile.acceleration * (amax 0.0 (1.0 - (vrigSquare (speed / profile.topSpeed))))
+        local accel = vrigLongitudinalAvailable drive speed curvatures[index - 1] lateralLimit
         local span = distances[index] - distances[index - 1]
-        local reachable = sqrt ((vrigSquare speeds[index - 1]) + 2.0 * profile.acceleration * span)
-        speeds[index] = amin speeds[index] reachable
+        speeds[index] = amin speeds[index] (sqrt (speed * speed + 2.0 * accel * span))
     )
     for index = count - 1 to 1 by -1 do
     (
+        local speed = speeds[index + 1]
+        local brake = vrigLongitudinalAvailable (gripUsage * profile.braking) speed curvatures[index + 1] lateralLimit
         local span = distances[index + 1] - distances[index]
-        local reachable = sqrt ((vrigSquare speeds[index + 1]) + 2.0 * profile.braking * span)
-        speeds[index] = amin speeds[index] reachable
+        speeds[index] = amin speeds[index] (sqrt (speed * speed + 2.0 * brake * span))
     )
     speeds
 )
@@ -562,43 +638,51 @@ fn vrigTravelTimes distances speeds =
     times
 )
 
--- Curvature is taken from the heading the vehicle actually holds (both
--- axles on the path), not from the raw spline, so speed and steering follow
--- what the car does at a corner knot rather than an instantaneous kink.
-fn vrigPlanMotion path profile targetSpeed =
+-- Heading and slope come from the pose the vehicle actually holds (both
+-- axles on the path), so speed, steering and body load follow what the car
+-- does at a corner knot or a crest rather than an instantaneous kink.
+fn vrigPlanMotion path profile targetSpeed gripUsage =
 (
     local count = path.points.count
     local yaws = #()
+    local slopes = #()
     local previous = undefined
     for index = 1 to count do
     (
-        local yaw = (vrigAxlePose path path.distances[index] profile.wheelbase)[2]
+        local pose = vrigAxlePose path path.distances[index] profile.wheelbase
+        local yaw = pose[2]
         if previous != undefined do yaw = vrigUnwrapDegrees yaw previous
         append yaws yaw
+        append slopes pose[3]
         previous = yaw
     )
     local curvatures = #()
+    local verticalCurvatures = #()
     for index = 1 to count do
     (
         local low = amax 1 (index - 1)
         local high = amin count (index + 1)
         local span = path.distances[high] - path.distances[low]
         append curvatures (if span <= 1e-9 then 0.0 else ((degToRad (yaws[high] - yaws[low])) / span))
+        append verticalCurvatures (if span <= 1e-9 then 0.0 else ((degToRad (slopes[high] - slopes[low])) / span))
     )
-    local speeds = vrigSpeedProfile path.points path.distances curvatures profile targetSpeed
+    local speeds = vrigSpeedProfile path.distances curvatures profile targetSpeed gripUsage
     local times = vrigTravelTimes path.distances speeds
-    VehicleRigMotion path:path yaws:yaws curvatures:curvatures speeds:speeds \
-        times:times duration:times[times.count]
+    VehicleRigMotion path:path yaws:yaws curvatures:curvatures slopes:slopes \
+        verticalCurvatures:verticalCurvatures speeds:speeds times:times duration:times[times.count]
 )
 
--- Distance, speed and curvature `elapsed` seconds into the drive.
+-- Distance, speed, curvature and vertical curvature `elapsed` seconds into
+-- the drive; past the end the vehicle stays parked at the last point.
 fn vrigStateAtTime motion elapsed =
 (
     local times = motion.times
     local distances = motion.path.distances
     local count = times.count
-    if elapsed <= 0.0 then #(distances[1], motion.speeds[1], motion.curvatures[1])
-    else if elapsed >= times[count] then #(distances[count], motion.speeds[count], motion.curvatures[count])
+    if elapsed <= 0.0 then
+        #(distances[1], motion.speeds[1], motion.curvatures[1], motion.verticalCurvatures[1])
+    else if elapsed >= times[count] then
+        #(distances[count], 0.0, motion.curvatures[count], motion.verticalCurvatures[count])
     else
     (
         local low = 1
@@ -612,7 +696,8 @@ fn vrigStateAtTime motion elapsed =
         local blend = if span <= 1e-12 then 0.0 else ((elapsed - times[low]) / span)
         #(distances[low] + blend * (distances[high] - distances[low]), \
           motion.speeds[low] + blend * (motion.speeds[high] - motion.speeds[low]), \
-          motion.curvatures[low] + blend * (motion.curvatures[high] - motion.curvatures[low]))
+          motion.curvatures[low] + blend * (motion.curvatures[high] - motion.curvatures[low]), \
+          motion.verticalCurvatures[low] + blend * (motion.verticalCurvatures[high] - motion.verticalCurvatures[low]))
     )
 )
 
@@ -633,6 +718,52 @@ fn vrigSuspensionStep state target dt naturalHz dampingRatio =
         value += velocity * stepSeconds
     )
     #(value, velocity)
+)
+
+-- How far one corner rises for a body pose; pitch is nose-up and roll
+-- lifts the left side, both in degrees. `corner` is #(forward, left) in
+-- metres from the body pivot. Mirrors vehicle_dynamics._corner_rise.
+fn vrigCornerRise heave pitch roll corner =
+(
+    heave + corner[1] * (tan pitch) + corner[2] * (tan roll)
+)
+
+-- The body heights that keep every corner within its travel for a lean
+-- scaled by `share`, as #(lowest, highest).
+fn vrigHeightWindow pitch roll share corners compressionLimits extensionLimit =
+(
+    local lowest = -1e30
+    local highest = 1e30
+    for index = 1 to corners.count do
+    (
+        local tilt = vrigCornerRise 0.0 (pitch * share) (roll * share) corners[index]
+        lowest = amax lowest (-compressionLimits[index] - tilt)
+        highest = amin highest (extensionLimit - tilt)
+    )
+    #(lowest, highest)
+)
+
+-- Keeps each corner within its travel, lifting or lowering the body before
+-- reducing the lean, so a wheel arch never comes down onto its tyre.
+-- Mirrors vehicle_dynamics.fit_body_pose; returns #(heave, pitch, roll).
+fn vrigFitBodyPose heave pitch roll corners compressionLimits extensionLimit =
+(
+    local share = 1.0
+    local window = vrigHeightWindow pitch roll 1.0 corners compressionLimits extensionLimit
+    if window[1] > window[2] do
+    (
+        local low = 0.0
+        local high = 1.0
+        for iteration = 1 to 40 do
+        (
+            local middle = (low + high) / 2.0
+            local trial = vrigHeightWindow pitch roll middle corners compressionLimits extensionLimit
+            if trial[1] <= trial[2] then low = middle else high = middle
+        )
+        share = low
+        window = vrigHeightWindow pitch roll share corners compressionLimits extensionLimit
+    )
+    #(amin (amax heave window[1]) window[2], pitch * share, roll * share)
 )
 
 /* ------------------------------------------------------------------ *
@@ -673,8 +804,10 @@ fn vrigNearestKnot knotPoints location =
 )
 
 -- Returns #(issues, motion) where motion is undefined when the path has
--- errors. `vehicleLength` is in metres and may be undefined.
-fn vrigPreflightPath splineNode profile scale sampleCount targetSpeed vehicleLength =
+-- errors. `vehicleLength` is in metres and may be undefined. `steerLimits`
+-- is #(left, right): the most centre steering the model's wheel arches
+-- allow each way, or undefined before the clearance is known.
+fn vrigPreflightPath splineNode profile scale sampleCount targetSpeed vehicleLength gripUsage steerLimits =
 (
     local issues = #()
     local knotPoints = vrigKnotPoints splineNode scale
@@ -693,24 +826,44 @@ fn vrigPreflightPath splineNode profile scale sampleCount targetSpeed vehicleLen
 
     local count = vrigSampleCountFor splineNode sampleCount scale
     local path = vrigMakePath (vrigSamplePath splineNode count scale)
-    local motion = vrigPlanMotion path profile targetSpeed
+    local motion = vrigPlanMotion path profile targetSpeed gripUsage
 
     if vehicleLength != undefined and path.length < vehicleLength do
         append issues (VehicleRigIssue code:"path_shorter_than_vehicle" severity:"warning" \
             message:("The path is " + (vrigMetres path.length) + " long but the vehicle is " + \
                 (vrigMetres vehicleLength) + "; it will barely move") index:undefined)
 
-    -- Steering: the lock this vehicle would need to hold the path.
-    local needs = for curvature in motion.curvatures collect (atan (profile.wheelbase * (abs curvature)))
-    local flags = for needed in needs collect (needed > profile.maxSteer)
+    -- Steering: the lock this vehicle needs to hold the path at the planned
+    -- speed, against the tighter of its preset lock and its wheel arches.
+    local leftLimit = profile.maxSteer
+    local rightLimit = profile.maxSteer
+    if steerLimits != undefined do
+    (
+        leftLimit = amin leftLimit steerLimits[1]
+        rightLimit = amin rightLimit steerLimits[2]
+    )
+    local needs = #()
+    local flags = #()
+    for index = 1 to motion.curvatures.count do
+    (
+        local curvature = motion.curvatures[index]
+        local speed = motion.speeds[index]
+        local needed = (atan (profile.wheelbase * (abs curvature))) + \
+            profile.understeer * speed * speed * (abs curvature) / (vrigGravity())
+        append needs needed
+        append flags (needed > (if curvature >= 0.0 then leftLimit else rightLimit))
+    )
     for run in (vrigFlagRuns flags) do
     (
         local worst = 0.0
         for index = run[1] to run[2] do worst = amax worst needs[index]
+        local turningLeft = motion.curvatures[run[1]] >= 0.0
+        local limit = if turningLeft then leftLimit else rightLimit
+        local cause = if limit < profile.maxSteer then "the model's wheel arches allow" else "this vehicle has"
         append issues (VehicleRigIssue code:"steering_limit" severity:"warning" \
             message:("From " + (vrigMetres path.distances[run[1]]) + " to " + (vrigMetres path.distances[run[2]]) + \
-                " the path needs " + (formattedPrint worst format:".0f") + " deg of steering; this vehicle has " + \
-                (formattedPrint profile.maxSteer format:".0f") + " deg") \
+                " the path needs " + (formattedPrint worst format:".0f") + " deg of steering; " + cause + " " + \
+                (formattedPrint limit format:".0f") + " deg, so the wheels will stop there") \
             index:(vrigNearestKnot knotPoints path.points[run[1]]))
     )
 
@@ -789,7 +942,8 @@ fn vrigStringToMatrix text =
 
 fn vrigIsBakeHelper node =
 (
-    (findItem #("VRIG_Master", "VRIG_Body", "VRIG_Steering", "VRIG_PathGuide") node.name) > 0 or \
+    (findItem #("VRIG_Master", "VRIG_Body", "VRIG_Steering", "VRIG_PathGuide", \
+        "VRIG_SteeringColumn", "VRIG_SteeringSpin") node.name) > 0 or \
         (matchPattern node.name pattern:"VRIG_WheelPivot_*") or \
         (matchPattern node.name pattern:"VRIG_WheelSpin_*")
 )
@@ -1075,6 +1229,295 @@ fn vrigDescribeMeasure measure scale =
 )
 
 /* ------------------------------------------------------------------ *
+ * Wheel-arch clearance. Imported models often fit their arches within a
+ * few centimetres of the tyres, so the body may only move as far as the
+ * model itself allows.
+ * ------------------------------------------------------------------ */
+
+-- Session cache, so repeated bakes of one vehicle skip the measurement
+-- without writing anything into the scene.
+global vrigClearanceCache = #()
+
+-- Tyre envelope: a cylinder around the measured wheel, sampled on its
+-- tread and both sidewalls. `axle` is the unit axle direction.
+fn vrigTyreEnvelope centre radius halfWidth axle =
+(
+    local up = [0, 0, 1]
+    local along = normalize (cross axle up)
+    local points = #()
+    for step = 0 to 47 do
+    (
+        local angle = step * 7.5
+        local radial = along * (cos angle) + up * (sin angle)
+        for offset in #(-0.9, 0.0, 0.9) do
+            append points (centre + radial * radius + axle * (offset * halfWidth))
+        if (mod step 2) == 0 do
+            for side in #(-1.0, 1.0) do
+                append points (centre + radial * (radius * 0.85) + axle * (side * halfWidth))
+    )
+    points
+)
+
+-- One ray grid per mesh: a grid keeps only the first node added to it.
+fn vrigMeshGrids nodes =
+(
+    for node in nodes collect
+    (
+        local grid = RayMeshGridIntersect()
+        grid.initialize 24
+        grid.addNode node
+        grid.buildGrid()
+        grid
+    )
+)
+
+fn vrigFreeGrids grids = ( for grid in grids do grid.free() )
+
+fn vrigNodeNear node centre reach =
+(
+    local bounds = nodeGetBoundingBox node (matrix3 1)
+    bounds[1].x <= centre.x + reach and bounds[2].x >= centre.x - reach and \
+    bounds[1].y <= centre.y + reach and bounds[2].y >= centre.y - reach and \
+    bounds[1].z <= centre.z + reach and bounds[2].z >= centre.z - reach
+)
+
+-- True when the tyre, turned by `angle` about the vertical through its
+-- centre and raised by `lift` into the arch, crosses any grid.
+fn vrigTyreCollides grids points centre angle lift =
+(
+    local rotation = rotateZMatrix angle
+    local origin = centre + [0, 0, lift]
+    local hit = false
+    for tyrePoint in points while not hit do
+    (
+        local moved = ((tyrePoint - centre) * rotation) + origin
+        for grid in grids while not hit do
+            if (grid.intersectSegment origin moved true) > 0 do hit = true
+    )
+    hit
+)
+
+-- Largest steering angle in `direction` (+1 left, -1 right) before the
+-- tyre, already raised by `lift`, touches the body.
+fn vrigSteerClearance grids points centre direction lift =
+(
+    if vrigTyreCollides grids points centre 0.0 lift then 0.0
+    else if not (vrigTyreCollides grids points centre (direction * 60.0) lift) then 60.0
+    else
+    (
+        local low = 0.0
+        local high = 60.0
+        for iteration = 1 to 12 do
+        (
+            local middle = (low + high) / 2.0
+            if vrigTyreCollides grids points centre (direction * middle) lift then high = middle else low = middle
+        )
+        low
+    )
+)
+
+-- Measures how far each corner may compress and how far each front wheel
+-- may steer before the model's own arches meet the tyre. A mesh that
+-- already crosses a tyre at rest, such as a liner modelled inside the
+-- wheel, is left out for that wheel: the modeller accepted it, and
+-- counting it would forbid any motion at all.
+fn vrigMeasureClearance bodyNodes wheelNodes measure profile scale =
+(
+    local started = timeStamp()
+    local leftVector = vrigAxisVector (vrigLeftAxis measure.forwardIndex)
+    local radius = measure.tyreRadius
+    local reach = radius * 2.2
+    local candidates = #()
+    for node in bodyNodes do
+    (
+        local close = false
+        for centre in measure.wheelCentres while not close do close = vrigNodeNear node centre reach
+        if close do append candidates node
+    )
+    local grids = vrigMeshGrids candidates
+    local travelLimit = profile.springTravel * scale
+    local compression = #()
+    local gaps = #()
+    local clear = #()
+    local ignored = #()
+    for index = 1 to 4 do
+    (
+        local centre = measure.wheelCentres[index]
+        local bounds = vrigWorldBounds (vrigGeometryUnder wheelNodes[index])
+        local halfWidth = (abs (dot (bounds[2] - bounds[1]) leftVector)) / 2.0
+        local points = vrigTyreEnvelope centre radius halfWidth leftVector
+        local active = #()
+        for meshIndex = 1 to candidates.count where (vrigNodeNear candidates[meshIndex] centre reach) do
+        (
+            local crossing = false
+            for tyrePoint in points while not crossing do
+                if (grids[meshIndex].intersectSegment centre tyrePoint true) > 0 do crossing = true
+            if crossing then appendIfUnique ignored candidates[meshIndex].name
+            else append active grids[meshIndex]
+        )
+        local gap = 1e30
+        for tyrePoint in points where tyrePoint.z > centre.z + radius * 0.2 do
+            for grid in active do
+                if (grid.intersectRay tyrePoint [0, 0, 1] true) > 0 do
+                    gap = amin gap (grid.getHitDist (grid.getClosestHit()))
+        append gaps gap
+        -- Keep a margin for the space between envelope samples.
+        local allowed = if gap >= 1e29 then travelLimit else (amax 0.0 (gap - (amax (0.005 * scale) (gap * 0.15))))
+        append compression (amin allowed travelLimit)
+        if index <= 2 then
+        (
+            local leftClear = amax 0.0 ((vrigSteerClearance active points centre 1.0 compression[index]) - 1.5)
+            local rightClear = amax 0.0 ((vrigSteerClearance active points centre -1.0 compression[index]) - 1.5)
+            append clear #(leftClear, rightClear)
+        )
+        else append clear undefined
+    )
+    vrigFreeGrids grids
+    -- A left turn puts the left wheel on the inside.
+    VehicleRigClearance compression:compression archGaps:gaps \
+        leftTurnLimits:#(clear[1][1], clear[2][1]) rightTurnLimits:#(clear[2][2], clear[1][2]) \
+        ignored:ignored seconds:((timeStamp() - started) / 1000.0)
+)
+
+fn vrigClearanceKey rootNode measure profile scale bodyNodes =
+(
+    local key = (rootNode.inode.handle as string) + "|" + profile.name + "|" + (scale as string) + "|" + \
+        (bodyNodes.count as string) + "|" + (measure.tyreRadius as string)
+    for centre in measure.wheelCentres do key += "|" + ((centre - measure.groundCentre) as string)
+    key
+)
+
+-- The clearance for this vehicle, measured once per layout per session.
+fn vrigCachedClearance rootNode bodyNodes wheelNodes measure profile scale =
+(
+    local key = vrigClearanceKey rootNode measure profile scale bodyNodes
+    local found = undefined
+    for entry in vrigClearanceCache where entry[1] == key do found = entry[2]
+    if found == undefined do
+    (
+        found = vrigMeasureClearance bodyNodes wheelNodes measure profile scale
+        append vrigClearanceCache #(key, found)
+    )
+    found
+)
+
+-- Centre steering the arches allow, as #(left, right) degrees.
+fn vrigSteerLimits clearance profile =
+(
+    #(vrigMaxCentreSteer profile clearance.leftTurnLimits[1] clearance.leftTurnLimits[2], \
+      vrigMaxCentreSteer profile clearance.rightTurnLimits[1] clearance.rightTurnLimits[2])
+)
+
+fn vrigGapText gap scale = if gap >= 1e29 then "open" else ((formattedPrint (gap / scale * 100.0) format:".1f") + " cm")
+
+fn vrigDescribeClearance clearance profile scale =
+(
+    local limits = vrigSteerLimits clearance profile
+    local text = "Wheel arches: " + (vrigGapText (amin clearance.archGaps[1] clearance.archGaps[2]) scale) + \
+        " above the front tyres, " + (vrigGapText (amin clearance.archGaps[3] clearance.archGaps[4]) scale) + \
+        " above the rear; steering lock " + (formattedPrint limits[1] format:".0f") + " deg left, " + \
+        (formattedPrint limits[2] format:".0f") + " deg right"
+    if clearance.ignored.count > 0 do
+    (
+        text += ". Already inside the tyres at rest, so not counted: "
+        for index = 1 to clearance.ignored.count do
+        (
+            local parts = filterString clearance.ignored[index] ":"
+            text += (if index > 1 then ", " else "") + parts[parts.count]
+        )
+    )
+    text + "."
+)
+
+-- Body meshes for clearance: everything under the body that is not part
+-- of a wheel, a brake or the steering wheel.
+fn vrigClearanceBodyNodes bodyNode wheelNodes extraNodes =
+(
+    local excluded = #()
+    for node in (join (copy wheelNodes #nomap) extraNodes) where node != undefined do
+        join excluded (vrigGeometryUnder node)
+    for node in (vrigGeometryUnder bodyNode) where (findItem excluded node) == 0 collect node
+)
+
+/* ------------------------------------------------------------------ *
+ * Steering wheel
+ * ------------------------------------------------------------------ */
+
+fn vrigCovarianceTimes rows vector = [dot rows[1] vector, dot rows[2] vector, dot rows[3] vector]
+
+fn vrigDominantAxis rows seed =
+(
+    local axis = normalize seed
+    local settled = false
+    for iteration = 1 to 80 while not settled do
+    (
+        local product = vrigCovarianceTimes rows axis
+        if (length product) < 1e-12 then settled = true
+        else
+        (
+            local updated = normalize product
+            if (distance updated axis) < 1e-10 do settled = true
+            axis = updated
+        )
+    )
+    axis
+)
+
+-- Normal of the plane a set of points lies closest to: the axis a
+-- steering wheel turns about. Power iteration finds the two directions the
+-- rim spreads along; their cross product is the column.
+fn vrigPlaneNormal points =
+(
+    local mean = [0, 0, 0]
+    for p in points do mean += p
+    mean = mean / points.count
+    local rows = #([0, 0, 0], [0, 0, 0], [0, 0, 0])
+    for p in points do
+    (
+        local d = p - mean
+        rows[1] += d * d.x
+        rows[2] += d * d.y
+        rows[3] += d * d.z
+    )
+    local first = vrigDominantAxis rows [1.0, 0.31, 0.17]
+    local firstValue = dot first (vrigCovarianceTimes rows first)
+    local deflated = for index = 1 to 3 collect (rows[index] - first * (firstValue * first[index]))
+    local second = vrigDominantAxis deflated (cross first [0.29, 0.13, 1.0])
+    normalize (cross first second)
+)
+
+-- Centre and turning axis of a steering wheel, the axis pointing back
+-- toward the driver. Returns #(centre, axis), or undefined without geometry.
+fn vrigSteeringAxis steeringNode forwardVector =
+(
+    local nodes = vrigGeometryUnder steeringNode
+    if nodes.count == 0 then undefined
+    else
+    (
+        local points = #()
+        for node in nodes do
+        (
+            local snapshot = snapshotAsMesh node
+            local stride = amax 1 (snapshot.numverts / 3000)
+            for index = 1 to snapshot.numverts by stride do append points (getVert snapshot index)
+        )
+        local axis = vrigPlaneNormal points
+        if (dot axis forwardVector) > 0.0 do axis = -axis
+        #(vrigBoundsCenter nodes, axis)
+    )
+)
+
+-- A frame whose Z axis is `axis`, at `position`.
+fn vrigAxisMatrix axis position =
+(
+    local zAxis = normalize axis
+    local reference = if (abs zAxis.z) > 0.9 then [1, 0, 0] else [0, 0, 1]
+    local xAxis = normalize (cross reference zAxis)
+    local yAxis = cross zAxis xAxis
+    matrix3 xAxis yAxis zAxis position
+)
+
+/* ------------------------------------------------------------------ *
  * Imported vehicle assembly
  * ------------------------------------------------------------------ */
 
@@ -1134,39 +1577,54 @@ fn vrigAssemblyPoint pointName size colourValue position parentNode =
     helper
 )
 
--- Returns #(ok, message, root, body, wheels, brakes); brakes[i] may be
--- undefined when a wheel has no caliper parts.
+-- A steering wheel turns with the front wheels; its parts ride on the body.
+fn vrigIsSteeringWheelPart node =
+(
+    local compact = substituteString (substituteString (substituteString (toLower node.name) "_" "") " " "") "-" ""
+    (findString compact "steeringwheel") != undefined
+)
+
+fn vrigAssemblyFailure message = #(false, message, undefined, undefined, #(), #(), undefined)
+
+-- Returns #(ok, message, root, body, wheels, brakes, steeringWheel);
+-- brakes[i] is undefined when a wheel has no caliper parts, and
+-- steeringWheel is undefined when the import has none.
 fn vrigAssembleSelectedVehicle vehicleName =
 (
     local wheelTokens = #("FL", "FR", "RL", "RR")
-    local failure = #(false, "", undefined, undefined, #(), #())
     local meshNodes = for node in selection where (superClassOf node == GeometryClass) and \
         not (matchPattern node.name pattern:"VRIG_*") collect node
     if meshNodes.count == 0 do
-        return #(false, "Select the imported vehicle mesh nodes before assembly.", undefined, undefined, #(), #())
+        return (vrigAssemblyFailure "Select the imported vehicle mesh nodes before assembly.")
 
     local spinSets = #(#(), #(), #(), #())
     local brakeSets = #(#(), #(), #(), #())
     local bodyMeshes = #()
+    local steeringMeshes = #()
     for node in meshNodes do
     (
         if (vrigWheelMatchCount node) > 1 do
-            return #(false, (node.name + " matches more than one wheel cluster."), undefined, undefined, #(), #())
+            return (vrigAssemblyFailure (node.name + " matches more than one wheel cluster."))
         local wheelIndex = vrigClassifyWheelNode node
-        if wheelIndex == 0 then append bodyMeshes node
-        else if vrigIsBrakePart node then append brakeSets[wheelIndex] node
-        else append spinSets[wheelIndex] node
+        if wheelIndex > 0 then
+        (
+            if vrigIsBrakePart node then append brakeSets[wheelIndex] node
+            else append spinSets[wheelIndex] node
+        )
+        else if vrigIsSteeringWheelPart node then append steeringMeshes node
+        else append bodyMeshes node
     )
     for wheelIndex = 1 to 4 do
         if spinSets[wheelIndex].count == 0 do
-            return #(false, ("Missing wheel cluster " + wheelTokens[wheelIndex] + "."), undefined, undefined, #(), #())
+            return (vrigAssemblyFailure ("Missing wheel cluster " + wheelTokens[wheelIndex] + "."))
     if bodyMeshes.count == 0 do
-        return #(false, "No non-wheel body meshes were found.", undefined, undefined, #(), #())
+        return (vrigAssemblyFailure "No non-wheel body meshes were found.")
 
     -- Group the highest imported parents. Each must belong to exactly one
     -- cluster: one imported parent holding both a wheel and body parts
     -- cannot be split without moving source geometry.
     local bodySet = vrigTopAssemblyNodes bodyMeshes
+    local steeringSet = vrigTopAssemblyNodes steeringMeshes
     local spinTops = for wheelIndex = 1 to 4 collect (vrigTopAssemblyNodes spinSets[wheelIndex])
     local brakeTops = for wheelIndex = 1 to 4 collect (vrigTopAssemblyNodes brakeSets[wheelIndex])
     local owners = #()
@@ -1184,18 +1642,19 @@ fn vrigAssembleSelectedVehicle vehicleName =
     )
     local clashes = #()
     append clashes (claim owners ownerNames bodySet "the body")
+    append clashes (claim owners ownerNames steeringSet "the steering wheel")
     for wheelIndex = 1 to 4 do
     (
         append clashes (claim owners ownerNames spinTops[wheelIndex] ("wheel " + wheelTokens[wheelIndex]))
         append clashes (claim owners ownerNames brakeTops[wheelIndex] ("brake " + wheelTokens[wheelIndex]))
     )
     for clash in clashes where clash != undefined do
-        return #(false, (clash[1].name + " holds parts of both " + clash[2] + " and " + clash[3] + \
-            ". Detach or ungroup them before assembly."), undefined, undefined, #(), #())
+        return (vrigAssemblyFailure (clash[1].name + " holds parts of both " + clash[2] + " and " + \
+            clash[3] + ". Detach or ungroup them before assembly."))
 
     local rootName = "VRIG_" + vehicleName + "_Root"
     if getNodeByName rootName != undefined do
-        return #(false, (rootName + " already exists. Remove the generated rig before assembling again."), undefined, undefined, #(), #())
+        return (vrigAssemblyFailure (rootName + " already exists. Remove the generated rig before assembling again."))
 
     -- Measure from the meshes before anything moves.
     local wheelCentres = #()
@@ -1212,6 +1671,7 @@ fn vrigAssembleSelectedVehicle vehicleName =
 
     local sourceNodes = #()
     join sourceNodes bodySet
+    join sourceNodes steeringSet
     for wheelIndex = 1 to 4 do ( join sourceNodes spinTops[wheelIndex]; join sourceNodes brakeTops[wheelIndex] )
     for node in sourceNodes do vrigRecordOriginalState node "assembly"
 
@@ -1226,9 +1686,23 @@ fn vrigAssembleSelectedVehicle vehicleName =
     if bodyGroup == undefined do
     (
         vrigRemoveGeneratedRig()
-        return #(false, "Max could not create the vehicle body group.", undefined, undefined, #(), #())
+        return (vrigAssemblyFailure "Max could not create the vehicle body group.")
     )
     bodyGroup.parent = bodyCarrier
+
+    local steeringWheel = undefined
+    if steeringSet.count > 0 do
+    (
+        steeringWheel = vrigAssemblyPoint ("VRIG_" + vehicleName + "_SteeringWheel") (tyreRadius * 0.6) \
+            (color 255 120 200) (vrigBoundsCenter steeringMeshes) bodyCarrier
+        local steeringGroup = group steeringSet name:("VRIG_" + vehicleName + "_SteeringGroup")
+        if steeringGroup == undefined do
+        (
+            vrigRemoveGeneratedRig()
+            return (vrigAssemblyFailure "Max could not create the steering wheel group.")
+        )
+        steeringGroup.parent = steeringWheel
+    )
 
     local wheels = #()
     local brakes = #()
@@ -1241,7 +1715,7 @@ fn vrigAssembleSelectedVehicle vehicleName =
         if wheelGroup == undefined do
         (
             vrigRemoveGeneratedRig()
-            return #(false, ("Max could not create wheel group " + token + "."), undefined, undefined, #(), #())
+            return (vrigAssemblyFailure ("Max could not create wheel group " + token + "."))
         )
         wheelGroup.parent = wheel
         append wheels wheel
@@ -1255,7 +1729,7 @@ fn vrigAssembleSelectedVehicle vehicleName =
             if brakeGroup == undefined do
             (
                 vrigRemoveGeneratedRig()
-                return #(false, ("Max could not create brake group " + token + "."), undefined, undefined, #(), #())
+                return (vrigAssemblyFailure ("Max could not create brake group " + token + "."))
             )
             brakeGroup.parent = brake
             setUserProp wheel "VRIG_brakeHandle" brake.inode.handle
@@ -1265,9 +1739,10 @@ fn vrigAssembleSelectedVehicle vehicleName =
     select root
     local brakeCount = 0
     for brake in brakes where brake != undefined do brakeCount += 1
-    #(true, ("Assembled " + (sourceNodes.count as string) + " imported nodes non-destructively; " + \
-        (brakeCount as string) + " wheel(s) have separate brake parts that steer without spinning."), \
-        root, bodyCarrier, wheels, brakes)
+    local message = "Assembled " + (sourceNodes.count as string) + " imported nodes non-destructively; " + \
+        (brakeCount as string) + " wheel(s) have separate brake parts that steer without spinning"
+    message += if steeringWheel != undefined then ", and the steering wheel turns with the front wheels." else "."
+    #(true, message, root, bodyCarrier, wheels, brakes, steeringWheel)
 )
 
 /* ------------------------------------------------------------------ *
@@ -1285,6 +1760,77 @@ fn vrigBuildOpenSpline splineName knotPoints isSmooth =
     path
 )
 
+-- Knots for a road made of straights, circular arcs and smooth ramps, in
+-- metres in the vehicle's frame (forward, left, up). Segments are
+-- #(#straight, length), #(#arc, radius, degrees) turning left for positive
+-- degrees, or #(#ramp, length, rise). Arcs use the cubic handle length
+-- 4/3 tan(sweep/4) r, so a bend has a constant radius rather than the
+-- uneven one auto-smoothed knots give. Returns #(point, in, out) triples.
+fn vrigRoadKnots segments =
+(
+    local position = [0, 0, 0]
+    local heading = 0.0
+    local knots = #(#(position, position, position))
+    for segment in segments do
+    (
+        local direction = [cos heading, sin heading, 0]
+        case segment[1] of
+        (
+            #straight:
+            (
+                local finish = position + direction * segment[2]
+                knots[knots.count][3] = position + direction * (segment[2] / 3.0)
+                append knots #(finish, finish - direction * (segment[2] / 3.0), finish)
+                position = finish
+            )
+            #arc:
+            (
+                local radius = segment[2]
+                local pieces = (ceil ((abs segment[3]) / 90.0)) as integer
+                local sweep = segment[3] / pieces
+                local handle = 4.0 / 3.0 * (tan ((abs sweep) / 4.0)) * radius
+                for piece = 1 to pieces do
+                (
+                    local startDirection = [cos heading, sin heading, 0]
+                    local side = if sweep > 0.0 then 1.0 else -1.0
+                    local centre = position + [-(sin heading), cos heading, 0] * (radius * side)
+                    local finish = centre + ((position - centre) * (rotateZMatrix sweep))
+                    heading += sweep
+                    local endDirection = [cos heading, sin heading, 0]
+                    knots[knots.count][3] = position + startDirection * handle
+                    append knots #(finish, finish - endDirection * handle, finish)
+                    position = finish
+                )
+            )
+            #ramp:
+            (
+                -- Level handles at both ends: a sag at the foot, a crest at the top.
+                local finish = position + direction * segment[2] + [0, 0, segment[3]]
+                knots[knots.count][3] = position + direction * (segment[2] / 2.0)
+                append knots #(finish, finish - direction * (segment[2] / 2.0), finish)
+                position = finish
+            )
+        )
+    )
+    knots
+)
+
+fn vrigBuildRoad splineName segments origin forward left scale =
+(
+    fn toWorld roadPoint origin forward left scale =
+    (
+        origin + (forward * roadPoint.x + left * roadPoint.y + [0, 0, roadPoint.z]) * scale
+    )
+    local path = SplineShape name:splineName
+    addNewSpline path
+    for knot in (vrigRoadKnots segments) do
+        addKnot path 1 #bezierCorner #curve (toWorld knot[1] origin forward left scale) \
+            (toWorld knot[2] origin forward left scale) (toWorld knot[3] origin forward left scale)
+    updateShape path
+    path.wirecolor = color 255 160 40
+    path
+)
+
 fn vrigAddTestLabel labelName labelText location colourValue size =
 (
     local label = text name:labelName text:labelText size:size
@@ -1294,9 +1840,11 @@ fn vrigAddTestLabel labelName labelText location colourValue size =
     label
 )
 
--- Five lanes laid out in metres from `origin` along the vehicle's facing,
--- so the paths suit the vehicle whatever the scene scale. Creates
--- fixtures once and never replaces artist-authored or prior evidence.
+-- Five realistic roads laid out in metres from `origin` along the
+-- vehicle's facing, so they suit the vehicle whatever the scene scale.
+-- Complex starts at the vehicle; the others run in lanes to its right.
+-- Creates fixtures once and never replaces artist-authored or prior
+-- evidence.
 fn vrigCreateTestPaths origin forwardIndex scale =
 (
     local fixtureNames = #( "VRIG_Test_Simple", "VRIG_Test_Complex", "VRIG_Test_UpHill", "VRIG_Test_DownHill", "VRIG_Test_InvalidKnot" )
@@ -1306,32 +1854,37 @@ fn vrigCreateTestPaths origin forwardIndex scale =
 
     local forward = vrigAxisVector (vrigForwardAxis forwardIndex)
     local left = vrigAxisVector (vrigLeftAxis forwardIndex)
-    -- #(forward m, left m, up m) knots; each lane sits 10 m further left.
-    local plans = #(
-        #("VRIG_Test_Complex", 0.0, true, #([0,0,0], [15,0,0], [30,5,0], [45,-5,0], [60,5,0], [75,0,0], [95,0,0])),
-        #("VRIG_Test_Simple", 10.0, true, #([0,0,0], [20,0,0], [40,2,0], [60,6,0])),
-        #("VRIG_Test_UpHill", 20.0, true, #([0,0,0], [15,0,0], [35,0,2], [55,0,4], [70,0,4])),
-        #("VRIG_Test_DownHill", 30.0, true, #([0,0,4], [15,0,4], [35,0,2], [55,0,0], [70,0,0])),
-        #("VRIG_Test_InvalidKnot", 40.0, false, #([0,0,0], [20,0,0], [20,0,0], [40,3,0]))
-    )
-    local labels = #(
-        #("VRIG_Test_Label_Complex", "VALID: complex", color 80 255 120),
-        #("VRIG_Test_Label_Simple", "VALID: simple", color 80 255 120),
-        #("VRIG_Test_Label_UpHill", "VALID: uphill", color 80 255 120),
-        #("VRIG_Test_Label_DownHill", "VALID: downhill", color 80 255 120),
-        #("VRIG_Test_Label_InvalidKnot", "EXPECTED REJECT: duplicate knot", color 255 90 90)
+    -- #(name, lane metres to the left, segments, label, colour)
+    local roads = #(
+        #("VRIG_Test_Complex", 0.0, \
+            #(#(#straight, 20.0), #(#arc, 30.0, -40.0), #(#arc, 30.0, 80.0), #(#arc, 30.0, -40.0), \
+              #(#straight, 15.0), #(#arc, 12.0, 90.0), #(#straight, 25.0)), \
+            "VALID: complex", color 80 255 120),
+        #("VRIG_Test_Simple", -30.0, \
+            #(#(#straight, 40.0), #(#arc, 60.0, 20.0), #(#straight, 20.0)), \
+            "VALID: simple", color 80 255 120),
+        #("VRIG_Test_UpHill", -45.0, \
+            #(#(#straight, 15.0), #(#ramp, 40.0, 4.0), #(#straight, 15.0)), \
+            "VALID: uphill", color 80 255 120),
+        #("VRIG_Test_DownHill", -60.0, \
+            #(#(#straight, 15.0), #(#ramp, 40.0, -4.0), #(#straight, 15.0)), \
+            "VALID: downhill", color 80 255 120)
     )
     local paths = #()
-    for index = 1 to plans.count do
+    for road in roads do
     (
-        local plan = plans[index]
-        local lane = plan[2]
-        local points = for knot in plan[4] collect \
-            (origin + (forward * knot.x + left * (knot.y + lane) + [0, 0, knot.z]) * scale)
-        append paths (vrigBuildOpenSpline plan[1] points plan[3])
-        vrigAddTestLabel labels[index][1] labels[index][2] \
-            (origin + (forward * -4.0 + left * lane) * scale) labels[index][3] scale
+        local laneOrigin = origin + left * (road[2] * scale)
+        append paths (vrigBuildRoad road[1] road[3] laneOrigin forward left scale)
+        vrigAddTestLabel (substituteString road[1] "VRIG_Test_" "VRIG_Test_Label_") road[4] \
+            (laneOrigin - forward * (4.0 * scale)) road[5] scale
     )
+    -- Two coincident knots: preflight must reject this one.
+    local invalidOrigin = origin + left * (-75.0 * scale)
+    local invalidKnots = for knot in #([0, 0, 0], [20, 0, 0], [20, 0, 0], [40, 3, 0]) collect \
+        (invalidOrigin + (forward * knot.x + left * knot.y) * scale)
+    append paths (vrigBuildOpenSpline "VRIG_Test_InvalidKnot" invalidKnots false)
+    vrigAddTestLabel "VRIG_Test_Label_InvalidKnot" "EXPECTED REJECT: duplicate knot" \
+        (invalidOrigin - forward * (4.0 * scale)) (color 255 90 90) scale
     #(true, "Created five labelled spline test fixtures.", paths)
 )
 
@@ -1393,13 +1946,13 @@ fn vrigHelperPoint helperName size colourValue position parentNode =
 
 -- Every helper sits at a measured location with world-aligned axes, so its
 -- Euler tracks map directly onto the vehicle's own axes whatever the
--- source pivots look like.
-fn vrigCreateHelpers measure =
+-- source pivots look like. The body turns about `bodyPivot`, set low near
+-- the roll centre so it leans like a car rather than about its axles.
+fn vrigCreateHelpers measure bodyPivot =
 (
     local radius = measure.tyreRadius
     local master = vrigHelperPoint "VRIG_Master" (measure.wheelbase * 0.6) (color 255 200 0) \
         measure.groundCentre undefined
-    local bodyPivot = [measure.bodyCentre.x, measure.bodyCentre.y, measure.axleZ]
     local body = vrigHelperPoint "VRIG_Body" (measure.track * 0.5) (color 120 200 255) bodyPivot master
     local steering = Circle name:"VRIG_Steering" radius:(measure.track * 0.25) wirecolor:(color 255 120 200)
     steering.renderable = false
@@ -1433,6 +1986,26 @@ fn vrigCreateHelpers measure =
     #(master, body, steering, pathGuide, wheelPivots, wheelSpins)
 )
 
+-- A steering column riding on the body, with a child that turns about it.
+-- Returns the turning child, or undefined when there is no steering wheel.
+fn vrigCreateSteeringColumn steeringNode body forwardVector size =
+(
+    local axisInfo = vrigSteeringAxis steeringNode forwardVector
+    if axisInfo == undefined then undefined
+    else
+    (
+        local column = Point name:"VRIG_SteeringColumn" size:size box:off cross:off axistripod:on \
+            centermarker:off wirecolor:(color 255 120 200)
+        column.transform = vrigAxisMatrix axisInfo[2] axisInfo[1]
+        column.parent = body
+        local spin = Point name:"VRIG_SteeringSpin" size:(size * 0.75) box:off cross:on axistripod:off \
+            centermarker:off wirecolor:(color 255 120 200)
+        spin.transform = column.transform
+        spin.parent = column
+        spin
+    )
+)
+
 -- The brake helper recorded on an assembled wheel, if any.
 fn vrigBrakeFor wheelNode =
 (
@@ -1452,6 +2025,7 @@ fn vrigBakeAnimation settings =
     local rootNode = settings.rootNode
     local bodyNode = settings.bodyNode
     local wheelNodes = settings.wheelNodes
+    local steeringNode = settings.steeringWheelNode
     local scale = settings.scale
     local startFrame = settings.startFrame
     local endFrame = settings.endFrame
@@ -1461,8 +2035,11 @@ fn vrigBakeAnimation settings =
     for index = 1 to 4 do
         if wheelNodes[index] == undefined or not (isValidNode wheelNodes[index]) do
             return #(false, "All four wheels must be assigned", 1.0)
+    if steeringNode != undefined and not (isValidNode steeringNode) do steeringNode = undefined
     if scale <= 0.0 do return #(false, "Scene units per metre must be greater than zero", 1.0)
     if profile.tyreRadius <= 0.0 do return #(false, "Tyre radius must be greater than zero", 1.0)
+    if settings.gripUsage <= 0.0 or settings.gripUsage > 1.0 do
+        return #(false, "Grip usage must be greater than zero and at most one", 1.0)
 
     -- A second bake replaces the first instead of stacking on top of it.
     vrigUnbake()
@@ -1477,32 +2054,53 @@ fn vrigBakeAnimation settings =
     local leftVector = vrigAxisVector leftAxis
     local forwardOffset = vrigForwardOffsetDegrees forwardIndex
 
+    -- How far the model's own arches let the body and front wheels move.
+    local brakeNodes = for wheel in wheelNodes collect (vrigBrakeFor wheel)
+    local extraNodes = for brake in brakeNodes where brake != undefined collect brake
+    if steeringNode != undefined do append extraNodes steeringNode
+    local clearanceBody = vrigClearanceBodyNodes bodyNode wheelNodes extraNodes
+    local clearance = vrigCachedClearance rootNode clearanceBody wheelNodes measure profile scale
+    local steerLimits = vrigSteerLimits clearance profile
+
     local count = vrigSampleCountFor settings.splineNode settings.sampleCount scale
     local path = vrigMakePath (vrigSamplePath settings.splineNode count scale)
     if settings.reversed do path = vrigReversePath path
-    local motion = vrigPlanMotion path profile settings.targetSpeed
+    local motion = vrigPlanMotion path profile settings.targetSpeed settings.gripUsage
     if motion.duration <= 0.0 do return #(false, "Path produced no usable motion", 1.0)
 
+    -- The vehicle parks at the end while the body settles, so the last
+    -- frame is not frozen mid-dive.
+    local totalSeconds = motion.duration + settings.settleSeconds
     if settings.matchDriveTime do
-        endFrame = startFrame + (amax 1 ((ceil (motion.duration * frameRate)) as integer))
+        endFrame = startFrame + (amax 1 ((ceil (totalSeconds * frameRate)) as integer))
     local frameSpan = (endFrame - startFrame) as float
     if frameSpan <= 0.0 do return #(false, "End frame must be greater than start frame", 1.0)
     animationRange = interval startFrame endFrame
     -- Natural seconds per frame; 1/frameRate when the range matches the drive.
-    local timeScale = motion.duration / (frameSpan / (frameRate as float))
+    local timeScale = totalSeconds / (frameSpan / (frameRate as float))
     local stepSeconds = timeScale / (frameRate as float)
+
+    -- The body leans about a pivot low between the axles, near the roll
+    -- centre. Corners and travel limits are in metres from that pivot.
+    local bodyPivot = [measure.bodyCentre.x, measure.bodyCentre.y, \
+        measure.groundZ + 0.45 * (measure.axleZ - measure.groundZ)]
+    local corners = for centre in measure.wheelCentres collect \
+        #((dot (centre - bodyPivot) forwardVector) / scale, (dot (centre - bodyPivot) leftVector) / scale)
+    local compressionLimits = for limit in clearance.compression collect (limit / scale)
+    local extensionLimit = amin profile.springTravel 0.07
 
     -- Wheel layout relative to the vehicle centre, in metres along the
     -- model's forward and left axes.
     local wheelForward = for centre in measure.wheelCentres collect ((dot (centre - measure.groundCentre) forwardVector) / scale)
     local wheelLeft = for centre in measure.wheelCentres collect ((dot (centre - measure.groundCentre) leftVector) / scale)
 
-    local helpers = vrigCreateHelpers measure
+    local helpers = vrigCreateHelpers measure bodyPivot
     local master = helpers[1]
     local body = helpers[2]
-    local steering = helpers[3]
     local wheelPivots = helpers[5]
     local wheelSpins = helpers[6]
+    local steeringSpin = if steeringNode == undefined then undefined \
+        else vrigCreateSteeringColumn steeringNode body forwardVector (measure.tyreRadius * 0.8)
 
     -- Bind while every generated helper is still at its rest pose.
     -- Parenting after the animated key loop would bake an inverse offset
@@ -1519,23 +2117,27 @@ fn vrigBakeAnimation settings =
     (
         vrigRecordOriginalState wheelNodes[index] "bake"
         wheelNodes[index].parent = wheelSpins[index]
-        local brake = vrigBrakeFor wheelNodes[index]
-        if brake != undefined do
+        if brakeNodes[index] != undefined do
         (
-            vrigRecordOriginalState brake "bake"
-            brake.parent = wheelPivots[index]
+            vrigRecordOriginalState brakeNodes[index] "bake"
+            brakeNodes[index].parent = wheelPivots[index]
         )
+    )
+    if steeringSpin != undefined do
+    (
+        vrigRecordOriginalState steeringNode "bake"
+        steeringNode.parent = steeringSpin
     )
 
     local masterControllers = vrigLayeredControllers master
     local bodyControllers = vrigLayeredControllers body
     local pivotControllers = for wheelPivot in wheelPivots collect (vrigLayeredControllers wheelPivot)
     local spinControllers = for wheelSpin in wheelSpins collect (vrigLayeredControllers wheelSpin)
+    local steeringControllers = if steeringSpin == undefined then undefined else (vrigLayeredControllers steeringSpin)
 
-    local naturalHz = 1.4
-    local rollState = #(0.0, 0.0)
-    local pitchState = #(0.0, 0.0)
     local heaveState = #(0.0, 0.0)
+    local pitchState = #(0.0, 0.0)
+    local rollState = #(0.0, 0.0)
     local wheelSpin = #(0.0, 0.0, 0.0, 0.0)
     local previousWheel = undefined
     local previousSpeed = undefined
@@ -1544,6 +2146,9 @@ fn vrigBakeAnimation settings =
     local peakSteer = 0.0
     local peakRoll = 0.0
     local peakPitch = 0.0
+    local peakCompression = 0.0
+    local steerHeld = false
+    local leanHeld = false
 
     with animate on
     (
@@ -1567,23 +2172,34 @@ fn vrigBakeAnimation settings =
             local wheelNow = for index = 1 to 4 collect \
                 ((vrigPathPoint path (travelled + wheelForward[index])) + headingLeft * wheelLeft[index])
 
+            -- Body: the settled pose for these loads, fitted inside the
+            -- arches, then eased toward by the springs and fitted again in
+            -- case the spring overshoots.
             local longitudinal = if previousSpeed == undefined or stepSeconds <= 1e-9 then 0.0 \
                 else ((speed - previousSpeed) / stepSeconds)
             local lateral = curvature * (vrigSquare speed)
-            local target = vrigBodyResponse profile longitudinal lateral \
+            local vertical = state[4] * (vrigSquare speed)
+            local target = vrigBodyResponse profile longitudinal lateral vertical \
                 settings.rollIntensity settings.accelIntensity settings.brakeIntensity settings.suspIntensity
+            local wanted = vrigFitBodyPose target[3] target[2] (-target[1]) corners compressionLimits extensionLimit
+            if (abs (wanted[2] - target[2])) > 0.01 or (abs (wanted[3] + target[1])) > 0.01 or \
+                (wanted[1] - target[3]) > 0.0005 do leanHeld = true
             if previousSpeed != undefined do
             (
-                rollState = vrigSuspensionStep rollState target[1] stepSeconds naturalHz profile.dampingRatio
-                pitchState = vrigSuspensionStep pitchState target[2] stepSeconds naturalHz profile.dampingRatio
-                heaveState = vrigSuspensionStep heaveState target[3] stepSeconds naturalHz profile.dampingRatio
+                heaveState = vrigSuspensionStep heaveState wanted[1] stepSeconds profile.rideFrequency profile.dampingRatio
+                pitchState = vrigSuspensionStep pitchState wanted[2] stepSeconds profile.rideFrequency profile.dampingRatio
+                rollState = vrigSuspensionStep rollState wanted[3] stepSeconds profile.rideFrequency profile.dampingRatio
             )
-            local roll = vrigClamp rollState[1] profile.maxRoll
-            local pitch = vrigClamp pitchState[1] profile.maxPitch
-            local heave = vrigClamp heaveState[1] profile.springTravel
+            local bodyPose = vrigFitBodyPose heaveState[1] pitchState[1] rollState[1] corners compressionLimits extensionLimit
+            for corner in corners do
+                peakCompression = amax peakCompression (-(vrigCornerRise bodyPose[1] bodyPose[2] bodyPose[3] corner))
 
-            local steerCentre = atan (profile.wheelbase * curvature)
-            local steerAngles = vrigAckermannAngles steerCentre profile.wheelbase profile.track profile.maxSteer
+            -- Steering, held at the lock the arches allow.
+            local wantedSteer = vrigSteeringAngle curvature speed profile
+            local steerCentre = if wantedSteer >= 0.0 then (amin wantedSteer steerLimits[1]) \
+                else (amax wantedSteer (-steerLimits[2]))
+            if (abs (steerCentre - wantedSteer)) > 0.05 do steerHeld = true
+            local steerAngles = vrigAckermannAngles steerCentre profile.wheelbase profile.track 90.0
             -- Positive steer is a left turn, which makes the left wheel the inner one.
             local steerLeft = if steerCentre >= 0.0 then steerAngles[1] else steerAngles[2]
             local steerRight = if steerCentre >= 0.0 then steerAngles[2] else steerAngles[1]
@@ -1597,10 +2213,10 @@ fn vrigBakeAnimation settings =
 
                 if bodyDriven do
                 (
-                    -- Roll outward about the forward axis; positive pitch is nose-up.
-                    bodyControllers[1].value = bodyControllers[3] + [0, 0, heave * scale]
-                    vrigSetEulerAxis bodyControllers[2] forwardAxis[1] (-1.0 * forwardAxis[2] * roll)
-                    vrigSetEulerAxis bodyControllers[2] leftAxis[1] (-1.0 * leftAxis[2] * pitch)
+                    -- Roll lifts the left side about the forward axis; pitch is nose-up.
+                    bodyControllers[1].value = bodyControllers[3] + [0, 0, bodyPose[1] * scale]
+                    vrigSetEulerAxis bodyControllers[2] forwardAxis[1] (forwardAxis[2] * bodyPose[3])
+                    vrigSetEulerAxis bodyControllers[2] leftAxis[1] (-1.0 * leftAxis[2] * bodyPose[2])
                 )
 
                 for index = 1 to 4 do
@@ -1616,24 +2232,34 @@ fn vrigBakeAnimation settings =
                 )
                 vrigSetEulerAxis pivotControllers[1][2] 3 steerLeft
                 vrigSetEulerAxis pivotControllers[2][2] 3 steerRight
+                -- A left turn turns the wheel anticlockwise as the driver sees it.
+                if steeringControllers != undefined do
+                    vrigSetEulerAxis steeringControllers[2] 3 (steerCentre * profile.steeringRatio)
             )
 
             previousWheel = wheelNow
             previousSpeed = speed
             peakSpeed = amax peakSpeed speed
-            peakSteer = amax peakSteer (abs steerAngles[1])
-            peakRoll = amax peakRoll (abs roll)
-            peakPitch = amax peakPitch (abs pitch)
+            peakSteer = amax peakSteer (amax (abs steerLeft) (abs steerRight))
+            peakRoll = amax peakRoll (abs bodyPose[3])
+            peakPitch = amax peakPitch (abs bodyPose[2])
         )
     )
 
     local notes = #()
-    append notes ("Frames " + (startFrame as string) + " to " + (endFrame as string) + "; drive time " + \
-        (formattedPrint motion.duration format:".1f") + " s, top speed " + \
+    append notes ("Frames " + (startFrame as string) + " to " + (endFrame as string) + "; drive " + \
+        (formattedPrint motion.duration format:".1f") + " s plus " + \
+        (formattedPrint settings.settleSeconds format:".1f") + " s to settle, top speed " + \
         (formattedPrint (peakSpeed * 3.6) format:".0f") + " km/h.")
-    append notes ("Peak steer " + (formattedPrint peakSteer format:".1f") + " deg, roll " + \
-        (formattedPrint peakRoll format:".1f") + " deg, pitch " + (formattedPrint peakPitch format:".1f") + " deg.")
+    append notes ("Peak wheel angle " + (formattedPrint peakSteer format:".1f") + " deg, body roll " + \
+        (formattedPrint peakRoll format:".1f") + " deg, pitch " + (formattedPrint peakPitch format:".1f") + \
+        " deg; no corner compresses more than " + (formattedPrint (peakCompression * 100.0) format:".1f") + " cm.")
+    append notes (vrigDescribeClearance clearance profile scale)
+    if steerHeld do append notes "In the tightest sections the front wheels stop at the lock the arches allow."
+    if leanHeld do append notes "Where the full lean would reach an arch, the body rises or leans less instead."
     if not bodyDriven do append notes "The body is the vehicle root, so body roll and pitch are not applied."
+    if steeringNode != undefined and steeringSpin == undefined do
+        append notes "The steering wheel has no geometry to measure, so it does not turn."
     if timeScale > 1.25 do
         append notes ("The frame range is shorter than the drive; motion plays " + \
             (formattedPrint timeScale format:".2f") + "x faster than the physics.")
@@ -1649,13 +2275,18 @@ fn vrigBakeAnimation settings =
  * Dialogue
  * ------------------------------------------------------------------ */
 
+-- Share of the tyres' grip each driving style uses.
+fn vrigDrivingStyles = #(#("Relaxed", 0.35), #("Normal", 0.55), #("Sporty", 0.75), #("Limit", 1.0))
+
 rollout VehicleRigRollout "Create Vehicle Rig" width:360
 (
     local boundRoot = undefined
     local boundBody = undefined
     local boundWheels = #(undefined, undefined, undefined, undefined)
+    local boundSteeringWheel = undefined
     local boundSpline = undefined
     local measure = undefined
+    local clearance = undefined
     local forwardOverride = false
     local preflightPassed = false
     local acknowledgedWarnings = false
@@ -1675,6 +2306,8 @@ rollout VehicleRigRollout "Create Vehicle Rig" width:360
         label wheelRLLabel "none" align:#left
         pickbutton wheelRRPick "Pick Wheel RR" width:160 across:2 message:"Pick rear-right wheel"
         label wheelRRLabel "none" align:#left
+        pickbutton steeringPick "Pick Steering Wheel" width:160 across:2 message:"Pick the steering wheel (optional)"
+        label steeringLabel "none (optional)" align:#left
         dropdownlist presetList "Vehicle preset" items:#("car") width:160
         spinner tyreRadiusSpin "Tyre radius (m)" range:[0.05, 1.5, 0.31] type:#float scale:0.01
         -- Filled from the measured wheels. A model built at a different
@@ -1687,6 +2320,7 @@ rollout VehicleRigRollout "Create Vehicle Rig" width:360
     (
         pickbutton splinePick "Pick Open Spline" width:160 across:2 message:"Pick one open spline"
         label splineLabel "none" align:#left
+        dropdownlist styleList "Driving style" items:#("Normal") width:160
         spinner startFrameSpin "Start frame" range:[-100000, 100000, 0] type:#integer
         spinner endFrameSpin "End frame" range:[-100000, 100000, 100] type:#integer
         checkbox matchDriveCheck "Match frame range to drive time" checked:true
@@ -1708,7 +2342,7 @@ rollout VehicleRigRollout "Create Vehicle Rig" width:360
         button removeButton "Remove Generated Rig" width:160
     )
 
-    edittext reportBox "" height:150 width:340 readonly:true
+    edittext reportBox "" height:170 width:340 readonly:true
 
     fn report lines =
     (
@@ -1716,6 +2350,8 @@ rollout VehicleRigRollout "Create Vehicle Rig" width:360
         for line in lines do text += line + "\r\n"
         reportBox.text = text
     )
+
+    fn selectedGripUsage = ((vrigDrivingStyles())[styleList.selection])[2]
 
     fn activeProfile =
     (
@@ -1742,16 +2378,18 @@ rollout VehicleRigRollout "Create Vehicle Rig" width:360
 
     fn wheelsBound =
     (
-        local complete = boundBody != undefined
+        local complete = boundBody != undefined and boundRoot != undefined
         for wheel in boundWheels where wheel == undefined do complete = false
         complete
     )
 
-    -- Measure once the body and four wheels are known, and fill the scale,
-    -- tyre radius and facing from the model. Returns report lines.
+    -- Measure once the root, body and four wheels are known: fill the
+    -- scale, tyre radius and facing from the model and measure how far its
+    -- wheel arches let the body move. Returns report lines.
     fn applyMeasurement =
     (
         measure = undefined
+        clearance = undefined
         if not (wheelsBound()) then #()
         else
         (
@@ -1772,6 +2410,17 @@ rollout VehicleRigRollout "Create Vehicle Rig" width:360
                         " units/m, which would make this wheelbase " + \
                         (vrigMetres (measure.wheelbase / (vrigUnitScale()))) + \
                         ". Fitted the scale to the " + preset.name + " preset instead; adjust if the model differs.")
+                -- A baked vehicle is not at rest; the bake measures it after unbaking.
+                if (vrigBakeHelpers()).count == 0 then
+                (
+                    local extras = for wheel in boundWheels collect (vrigBrakeFor wheel)
+                    extras = for node in extras where node != undefined collect node
+                    if boundSteeringWheel != undefined do append extras boundSteeringWheel
+                    local bodyNodes = vrigClearanceBodyNodes boundBody boundWheels extras
+                    clearance = vrigCachedClearance boundRoot bodyNodes boundWheels measure (activeProfile()) fitted[1]
+                    append lines (vrigDescribeClearance clearance (activeProfile()) fitted[1])
+                )
+                else append lines "Wheel-arch clearance is measured when you bake."
                 lines
             )
         )
@@ -1785,12 +2434,12 @@ rollout VehicleRigRollout "Create Vehicle Rig" width:360
         for index = 1 to 4 do
             if boundWheels[index] == undefined do
                 append errors ("Pick wheel " + (#("FL", "FR", "RL", "RR"))[index])
-        for node in #(boundRoot, boundBody, boundWheels[1], boundWheels[2], boundWheels[3], boundWheels[4]) \
+        for node in #(boundRoot, boundBody, boundWheels[1], boundWheels[2], boundWheels[3], boundWheels[4], boundSteeringWheel) \
             where node != undefined and not (isValidNode node) do
             append errors "A picked node has been deleted; pick it again"
         if boundRoot != undefined and (isValidNode boundRoot) do
         (
-            local assigned = #(boundBody, boundWheels[1], boundWheels[2], boundWheels[3], boundWheels[4])
+            local assigned = #(boundBody, boundWheels[1], boundWheels[2], boundWheels[3], boundWheels[4], boundSteeringWheel)
             for node in assigned where node != undefined and (isValidNode node) do
                 if not (vrigIsDescendantOf node boundRoot) do
                     append errors (node.name + " is outside the selected vehicle hierarchy")
@@ -1803,6 +2452,7 @@ rollout VehicleRigRollout "Create Vehicle Rig" width:360
     (
         rootLabel.text = if boundRoot == undefined then "none" else boundRoot.name
         bodyLabel.text = if boundBody == undefined then "none" else boundBody.name
+        steeringLabel.text = if boundSteeringWheel == undefined then "none (optional)" else boundSteeringWheel.name
         local labels = #(wheelFLLabel, wheelFRLabel, wheelRLLabel, wheelRRLabel)
         for index = 1 to 4 do
             labels[index].text = if boundWheels[index] == undefined then "none" else boundWheels[index].name
@@ -1810,10 +2460,18 @@ rollout VehicleRigRollout "Create Vehicle Rig" width:360
         applyMeasurement()
     )
 
+    fn reportPick =
+    (
+        local lines = bindPicked()
+        if lines.count > 0 do report lines
+    )
+
     on VehicleRigRollout open do
     (
         presetList.items = vrigPresetNames()
         presetList.selection = 1
+        styleList.items = for style in (vrigDrivingStyles()) collect style[1]
+        styleList.selection = 2
         startFrameSpin.value = animationRange.start.frame as integer
         endFrameSpin.value = animationRange.end.frame as integer
         local profile = vrigPresetByName (presetList.selected)
@@ -1847,6 +2505,7 @@ rollout VehicleRigRollout "Create Vehicle Rig" width:360
             boundRoot = result[3]
             boundBody = result[4]
             boundWheels = result[5]
+            boundSteeringWheel = result[7]
             local lines = #(result[2])
             join lines (bindPicked())
             append lines "Pick an open spline, or press Create Five Spline Tests, then run Preflight."
@@ -1865,17 +2524,19 @@ rollout VehicleRigRollout "Create Vehicle Rig" width:360
         else report #("Test-path creation skipped:", result[2])
     )
 
-    on rootPick picked node do ( boundRoot = node; local lines = bindPicked(); if lines.count > 0 do report lines )
-    on bodyPick picked node do ( boundBody = node; local lines = bindPicked(); if lines.count > 0 do report lines )
-    on wheelFLPick picked node do ( boundWheels[1] = node; local lines = bindPicked(); if lines.count > 0 do report lines )
-    on wheelFRPick picked node do ( boundWheels[2] = node; local lines = bindPicked(); if lines.count > 0 do report lines )
-    on wheelRLPick picked node do ( boundWheels[3] = node; local lines = bindPicked(); if lines.count > 0 do report lines )
-    on wheelRRPick picked node do ( boundWheels[4] = node; local lines = bindPicked(); if lines.count > 0 do report lines )
+    on rootPick picked node do ( boundRoot = node; reportPick() )
+    on bodyPick picked node do ( boundBody = node; reportPick() )
+    on wheelFLPick picked node do ( boundWheels[1] = node; reportPick() )
+    on wheelFRPick picked node do ( boundWheels[2] = node; reportPick() )
+    on wheelRLPick picked node do ( boundWheels[3] = node; reportPick() )
+    on wheelRRPick picked node do ( boundWheels[4] = node; reportPick() )
+    on steeringPick picked node do ( boundSteeringWheel = node; reportPick() )
     on splinePick picked node do ( boundSpline = node; splineLabel.text = node.name; invalidateBake() )
 
     on tyreRadiusSpin changed value do invalidateBake()
     on unitScaleSpin changed value do invalidateBake()
     on forwardAxisList selected index do ( forwardOverride = true; invalidateBake() )
+    on styleList selected index do invalidateBake()
     on reverseCheck changed state do invalidateBake()
     on matchDriveCheck changed state do invalidateBake()
     on startFrameSpin changed value do invalidateBake()
@@ -1910,8 +2571,9 @@ rollout VehicleRigRollout "Create Vehicle Rig" width:360
         else
         (
             local scale = unitScaleSpin.value
+            local steerLimits = if clearance == undefined then undefined else (vrigSteerLimits clearance profile)
             local checked = vrigPreflightPath boundSpline profile scale sampleSpin.value \
-                targetSpeedSpin.value (measure.length / scale)
+                targetSpeedSpin.value (measure.length / scale) (selectedGripUsage()) steerLimits
             local issues = checked[1]
             local motion = checked[2]
             local errorCount = vrigCountBySeverity issues "error"
@@ -1925,9 +2587,14 @@ rollout VehicleRigRollout "Create Vehicle Rig" width:360
             )
             else
             (
-                local frames = (ceil (motion.duration * frameRate)) as integer
-                append lines ("Path " + (vrigMetres motion.path.length) + "; drive time " + \
-                    (formattedPrint motion.duration format:".1f") + " s (" + (frames as string) + " frames).")
+                local settle = (VehicleRigBakeSettings()).settleSeconds
+                local frames = (ceil ((motion.duration + settle) * frameRate)) as integer
+                local peak = 0.0
+                for speed in motion.speeds do peak = amax peak speed
+                append lines ("Path " + (vrigMetres motion.path.length) + "; " + styleList.selected + \
+                    " driving takes " + (formattedPrint motion.duration format:".1f") + " s at up to " + \
+                    (formattedPrint (peak * 3.6) format:".0f") + " km/h, plus " + \
+                    (formattedPrint settle format:".1f") + " s to settle.")
                 if matchDriveCheck.checked then
                     append lines ("Bake will use frames " + (startFrameSpin.value as string) + " to " + \
                         ((startFrameSpin.value + frames) as string) + ".")
@@ -1962,13 +2629,14 @@ rollout VehicleRigRollout "Create Vehicle Rig" width:360
         (
             local settings = VehicleRigBakeSettings profile:(activeProfile()) splineNode:boundSpline \
                 rootNode:boundRoot bodyNode:boundBody wheelNodes:boundWheels \
+                steeringWheelNode:boundSteeringWheel \
                 startFrame:startFrameSpin.value endFrame:endFrameSpin.value \
                 reversed:reverseCheck.checked targetSpeed:targetSpeedSpin.value \
                 rollIntensity:rollSpin.value accelIntensity:accelSpin.value \
                 brakeIntensity:brakeSpin.value suspIntensity:suspensionSpin.value \
                 sampleCount:sampleSpin.value scale:unitScaleSpin.value \
                 forwardIndex:(if forwardOverride then forwardAxisList.selection else undefined) \
-                matchDriveTime:matchDriveCheck.checked
+                matchDriveTime:matchDriveCheck.checked gripUsage:(selectedGripUsage())
             local result = undefined
             undo "Bake Vehicle Rig" on ( result = vrigBakeAnimation settings )
             if result[1] then
@@ -1989,7 +2657,9 @@ rollout VehicleRigRollout "Create Vehicle Rig" width:360
         boundRoot = undefined
         boundBody = undefined
         boundWheels = #(undefined, undefined, undefined, undefined)
+        boundSteeringWheel = undefined
         measure = undefined
+        clearance = undefined
         bindPicked()
         report #(
             "Removed " + (result[2] as string) + " generated node(s).",
@@ -2000,5 +2670,5 @@ rollout VehicleRigRollout "Create Vehicle Rig" width:360
 
 if VehicleRigFloater != undefined and VehicleRigFloater != false do
     closeRolloutFloater VehicleRigFloater
-global VehicleRigFloater = newRolloutFloater "Vehicle Rig" 380 820
+global VehicleRigFloater = newRolloutFloater "Vehicle Rig" 380 900
 addRollout VehicleRigRollout VehicleRigFloater

@@ -35,6 +35,12 @@ PRESET_FIELDS = {
     "dampingRatio": "damping_ratio",
     "maxRoll": "max_roll_deg",
     "maxPitch": "max_pitch_deg",
+    "rollGradient": "roll_gradient_deg_per_g",
+    "squatGradient": "squat_gradient_deg_per_g",
+    "diveGradient": "dive_gradient_deg_per_g",
+    "rideFrequency": "ride_frequency_hz",
+    "understeer": "understeer_deg_per_g",
+    "steeringRatio": "steering_ratio",
 }
 
 _KEYWORD = re.compile(r'(\w+):(?:"([^"]*)"|(-?\d+\.?\d*))')
@@ -266,9 +272,86 @@ def test_wheels_spin_about_the_left_axis_and_steer_about_up(source: str) -> None
 
 def test_body_rolls_outward_and_pitches_nose_up_under_power(source: str) -> None:
     bake = _function(source, "vrigBakeAnimation")
-    assert "forwardAxis[1] (-1.0 * forwardAxis[2] * roll)" in bake
-    assert "leftAxis[1] (-1.0 * leftAxis[2] * pitch)" in bake
+    # The fitted pose carries left-side-up roll, so a left turn (negative
+    # body_response roll) lifts the left side: the body leans outward.
+    assert "vrigFitBodyPose target[3] target[2] (-target[1])" in bake
+    assert "forwardAxis[1] (forwardAxis[2] * bodyPose[3])" in bake
+    assert "leftAxis[1] (-1.0 * leftAxis[2] * bodyPose[2])" in bake
     assert "vrigSuspensionStep" in bake
+
+
+def test_body_is_fitted_inside_the_arches_before_and_after_the_springs(source: str) -> None:
+    bake = _function(source, "vrigBakeAnimation")
+    before = bake.index("vrigFitBodyPose target[3]")
+    spring = bake.index("vrigSuspensionStep heaveState")
+    after = bake.index("vrigFitBodyPose heaveState[1]")
+    assert before < spring < after
+
+
+def test_flat_road_driving_never_sinks_the_body(source: str) -> None:
+    response = _function(source, "vrigBodyResponse")
+    assert "loadRatio" not in source
+    assert "-vertical / (omega * omega)" in response
+    assert "profile.rollGradient" in response
+    assert "profile.squatGradient" in response and "profile.diveGradient" in response
+
+
+def test_body_fit_lifts_before_it_reduces_the_lean(source: str) -> None:
+    fit = _function(source, "vrigFitBodyPose")
+    assert "amin (amax heave window[1]) window[2]" in fit
+    assert "vrigHeightWindow" in fit
+
+
+def test_clearance_comes_from_the_models_own_arches(source: str) -> None:
+    measure = _function(source, "vrigMeasureClearance")
+    # Liners modelled inside the tyre at rest would forbid all motion.
+    assert "appendIfUnique ignored" in measure
+    assert "intersectRay tyrePoint [0, 0, 1] true" in measure
+    assert "vrigSteerClearance active points centre 1.0 compression[index]" in measure
+    # A grid keeps only the first node added, so each mesh gets its own.
+    grids = _function(source, "vrigMeshGrids")
+    assert "for node in nodes collect" in grids and "grid.addNode node" in grids
+    bake = _function(source, "vrigBakeAnimation")
+    assert "vrigCachedClearance rootNode clearanceBody wheelNodes measure profile scale" in bake
+
+
+def test_steering_stops_at_the_lock_the_arches_allow(source: str) -> None:
+    bake = _function(source, "vrigBakeAnimation")
+    assert "local steerLimits = vrigSteerLimits clearance profile" in bake
+    assert "amin wantedSteer steerLimits[1]" in bake
+    assert "amax wantedSteer (-steerLimits[2])" in bake
+    assert "vrigMaxCentreSteer profile clearance.leftTurnLimits[1]" in source
+
+
+def test_driving_shares_grip_between_cornering_and_braking(source: str) -> None:
+    speeds = _function(source, "vrigSpeedProfile")
+    assert "vrigLongitudinalAvailable drive speed" in speeds
+    assert "vrigLongitudinalAvailable (gripUsage * profile.braking)" in speeds
+    assert "(1.0 - (vrigSquare (speed / profile.topSpeed)))" in speeds
+    styles = _function(source, "vrigDrivingStyles")
+    for style in ('"Relaxed", 0.35', '"Normal", 0.55', '"Sporty", 0.75', '"Limit", 1.0'):
+        assert style in styles
+    assert "Driving style" in source
+
+
+def test_the_body_settles_after_the_vehicle_stops(source: str) -> None:
+    bake = _function(source, "vrigBakeAnimation")
+    assert "motion.duration + settings.settleSeconds" in bake
+
+
+def test_steering_wheel_turns_about_its_own_column(source: str) -> None:
+    assert '"steeringwheel"' in _function(source, "vrigIsSteeringWheelPart")
+    column = _function(source, "vrigCreateSteeringColumn")
+    assert "vrigAxisMatrix axisInfo[2] axisInfo[1]" in column
+    assert "column.parent = body" in column
+    bake = _function(source, "vrigBakeAnimation")
+    assert "vrigSetEulerAxis steeringControllers[2] 3 (steerCentre * profile.steeringRatio)" in bake
+
+
+def test_test_roads_use_constant_radius_bends(source: str) -> None:
+    knots = _function(source, "vrigRoadKnots")
+    assert "4.0 / 3.0 * (tan ((abs sweep) / 4.0)) * radius" in knots
+    assert "#bezierCorner" in _function(source, "vrigBuildRoad")
 
 
 def test_suspension_mirrors_the_python_spring_damper(source: str) -> None:
@@ -383,7 +466,7 @@ def test_imported_vehicle_assembly_uses_native_groups(source: str) -> None:
 def test_brake_parts_steer_without_spinning(source: str) -> None:
     brake = _function(source, "vrigIsBrakePart")
     assert '"caliper"' in brake and '"brake"' in brake
-    assert "brake.parent = wheelPivots[index]" in _function(source, "vrigBakeAnimation")
+    assert "brakeNodes[index].parent = wheelPivots[index]" in _function(source, "vrigBakeAnimation")
 
 
 def test_assembly_refuses_an_imported_parent_shared_between_clusters(source: str) -> None:
