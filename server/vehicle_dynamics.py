@@ -221,3 +221,124 @@ def body_response(
     )
     heave = -load_ratio * profile.spring_travel_m * intensity.suspension
     return BodyResponse(roll_deg=roll, pitch_deg=pitch, heave_m=heave)
+
+
+@dataclass(frozen=True)
+class SuspensionState:
+    """Position and velocity of one spring-damper body degree of freedom."""
+
+    value: float = 0.0
+    velocity: float = 0.0
+
+
+def suspension_step(
+    state: SuspensionState,
+    target: float,
+    dt: float,
+    *,
+    natural_hz: float = 1.4,
+    damping_ratio: float = 0.7,
+) -> SuspensionState:
+    """Advance a spring-damper toward ``target`` by ``dt`` seconds.
+
+    ``body_response`` gives the pose the chassis would settle to; this
+    supplies the motion between poses, so a change in acceleration eases the
+    body over rather than snapping it there in a single frame. The step is
+    split so each sub-step stays well inside the integrator's stable range,
+    which keeps a long frame from exploding the response.
+    """
+
+    if not math.isfinite(dt) or dt < 0.0:
+        raise ValueError("dt must be finite and non-negative")
+    if not math.isfinite(natural_hz) or natural_hz <= 0.0:
+        raise ValueError("natural_hz must be greater than zero")
+    if not 0.0 <= damping_ratio <= 1.0:
+        raise ValueError("damping_ratio must be between zero and one")
+
+    omega = 2.0 * math.pi * natural_hz
+    steps = max(1, math.ceil(dt * omega * 4.0))
+    step = dt / steps
+    value, velocity = state.value, state.velocity
+    for _ in range(steps):
+        acceleration = omega * omega * (target - value) - 2.0 * damping_ratio * omega * velocity
+        velocity += acceleration * step
+        value += velocity * step
+    return SuspensionState(value=value, velocity=velocity)
+
+
+@dataclass(frozen=True)
+class AxlePose:
+    """Where a two-axle vehicle sits when both axles are on the path."""
+
+    position: tuple[float, float, float]
+    heading_deg: float
+    pitch_deg: float
+
+
+def _cumulative(points: list[tuple[float, float, float]]) -> list[float]:
+    distances = [0.0]
+    for start, end in zip(points, points[1:]):
+        distances.append(distances[-1] + math.dist(start, end))
+    return distances
+
+
+def _end_direction(points, from_end: bool) -> tuple[float, float, float]:
+    pairs = zip(points[::-1][1:], points[::-1]) if from_end else zip(points, points[1:])
+    for start, end in pairs:
+        length = math.dist(start, end)
+        if length > 1e-12:
+            return tuple((e - s) / length for s, e in zip(start, end))
+    raise ValueError("path needs two distinct points")
+
+
+def point_at_distance(
+    points: list[tuple[float, float, float]], distance_m: float
+) -> tuple[float, float, float]:
+    """Return the path point ``distance_m`` along a polyline.
+
+    Distances before the start or past the end continue along the first or
+    last segment, so a vehicle centred on either end of the path still has
+    an axle to stand on.
+    """
+
+    path = [tuple(float(c) for c in point) for point in points]
+    distances = _cumulative(path)
+    if distance_m <= 0.0:
+        direction = _end_direction(path, from_end=False)
+        return tuple(p + d * distance_m for p, d in zip(path[0], direction))
+    if distance_m >= distances[-1]:
+        direction = _end_direction(path, from_end=True)
+        overshoot = distance_m - distances[-1]
+        return tuple(p + d * overshoot for p, d in zip(path[-1], direction))
+    for index in range(len(path) - 1):
+        if distances[index + 1] >= distance_m:
+            span = distances[index + 1] - distances[index]
+            blend = 0.0 if span <= 1e-12 else (distance_m - distances[index]) / span
+            return tuple(
+                s + blend * (e - s) for s, e in zip(path[index], path[index + 1])
+            )
+    return path[-1]
+
+
+def axle_pose(
+    points: list[tuple[float, float, float]], distance_m: float, wheelbase: float
+) -> AxlePose:
+    """Pose a vehicle whose centre is ``distance_m`` along the path.
+
+    The rear axle stands half a wheelbase behind and the front axle half a
+    wheelbase ahead, both on the path. Heading and slope come from the line
+    between them rather than from the tangent at one point, so a corner knot
+    turns the vehicle over its own length instead of in a single frame, and
+    nothing accumulates that could drift away from the path.
+    """
+
+    if not math.isfinite(wheelbase) or wheelbase <= 0.0:
+        raise ValueError("wheelbase must be greater than zero")
+    rear = point_at_distance(points, distance_m - wheelbase / 2.0)
+    front = point_at_distance(points, distance_m + wheelbase / 2.0)
+    dx, dy, dz = (f - r for f, r in zip(front, rear))
+    return AxlePose(
+        position=tuple((f + r) / 2.0 for f, r in zip(front, rear)),
+        heading_deg=math.degrees(math.atan2(dy, dx)),
+        pitch_deg=math.degrees(math.atan2(dz, math.hypot(dx, dy))),
+    )
