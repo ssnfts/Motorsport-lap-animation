@@ -51,7 +51,10 @@ struct VehicleRigMeasure
 -- #(inner, outer) for a left and a right turn.
 struct VehicleRigClearance
 (
-    compression, archGaps, leftTurnLimits, rightTurnLimits, ignored, seconds
+    compression, archGaps, leftTurnLimits, rightTurnLimits, ignored, seconds,
+    -- Kept for the per-frame contact check: rest wheel centres, tyre
+    -- envelope points, and each wheel's arch meshes as ray grids.
+    centres, wheelPoints, wheelGrids, grids
 )
 
 -- forwardIndex left undefined takes the facing measured from the wheels
@@ -1249,7 +1252,7 @@ fn vrigTyreEnvelope centre radius halfWidth axle =
     (
         local angle = step * 7.5
         local radial = along * (cos angle) + up * (sin angle)
-        for offset in #(-0.9, 0.0, 0.9) do
+        for offset in #(-0.95, -0.5, 0.0, 0.5, 0.95) do
             append points (centre + radial * radius + axle * (offset * halfWidth))
         if (mod step 2) == 0 do
             for side in #(-1.0, 1.0) do
@@ -1297,6 +1300,19 @@ fn vrigTyreCollides grids points centre angle lift =
     hit
 )
 
+-- True when the mesh in `grid` lies within `margin` of the tyre surface
+-- along any sampled outward direction.
+fn vrigGridWithin grid points centre margin =
+(
+    local found = false
+    for tyrePoint in points while not found do
+    (
+        local outward = tyrePoint + (normalize (tyrePoint - centre)) * margin
+        if (grid.intersectSegment tyrePoint outward true) > 0 do found = true
+    )
+    found
+)
+
 -- Largest steering angle in `direction` (+1 left, -1 right) before the
 -- tyre, already raised by `lift`, touches the body.
 fn vrigSteerClearance grids points centre direction lift =
@@ -1340,21 +1356,40 @@ fn vrigMeasureClearance bodyNodes wheelNodes measure profile scale =
     local gaps = #()
     local clear = #()
     local ignored = #()
+    local wheelPoints = #()
+    local wheelGrids = #()
+    local used = #()
+    local alongVector = normalize (cross leftVector [0, 0, 1])
     for index = 1 to 4 do
     (
         local centre = measure.wheelCentres[index]
         local bounds = vrigWorldBounds (vrigGeometryUnder wheelNodes[index])
         local halfWidth = (abs (dot (bounds[2] - bounds[1]) leftVector)) / 2.0
-        local points = vrigTyreEnvelope centre radius halfWidth leftVector
+        -- A few millimetres of skin cover the gap between this cylinder and
+        -- a real tyre's rounded shoulders.
+        local points = vrigTyreEnvelope centre (radius + 0.003 * scale) (halfWidth + 0.002 * scale) leftVector
         local active = #()
+        local activeIndices = #()
         for meshIndex = 1 to candidates.count where (vrigNodeNear candidates[meshIndex] centre reach) do
         (
             local crossing = false
             for tyrePoint in points while not crossing do
                 if (grids[meshIndex].intersectSegment centre tyrePoint true) > 0 do crossing = true
             if crossing then appendIfUnique ignored candidates[meshIndex].name
-            else append active grids[meshIndex]
+            else ( append active grids[meshIndex]; append activeIndices meshIndex )
         )
+        -- The per-frame check only needs meshes the body's motion could
+        -- bring to the tyre: compression, the arch sliding sideways as the
+        -- body rolls, and on front wheels the steering sweep.
+        local within = (if index <= 2 then 0.12 else 0.10) * scale
+        local nearGrids = #()
+        for slot = 1 to active.count do
+            if vrigGridWithin active[slot] points centre within do
+            (
+                append nearGrids active[slot]
+                appendIfUnique used activeIndices[slot]
+            )
+        append wheelGrids nearGrids
         local gap = 1e30
         for tyrePoint in points where tyrePoint.z > centre.z + radius * 0.2 do
             for grid in active do
@@ -1364,6 +1399,21 @@ fn vrigMeasureClearance bodyNodes wheelNodes measure profile scale =
         -- Keep a margin for the space between envelope samples.
         local allowed = if gap >= 1e29 then travelLimit else (amax 0.0 (gap - (amax (0.005 * scale) (gap * 0.15))))
         append compression (amin allowed travelLimit)
+        -- The points an arch can actually reach, for the per-frame check:
+        -- those under the arch within the travel plus a sideways allowance,
+        -- and on front wheels the shoulders that sweep when steering.
+        local reachable = compression[index] + 0.03 * scale
+        local risky = #()
+        for tyrePoint in points where tyrePoint.z >= centre.z - radius * 0.3 do
+        (
+            local above = 1e30
+            for grid in active do
+                if (grid.intersectRay tyrePoint [0, 0, 1] true) > 0 do
+                    above = amin above (grid.getHitDist (grid.getClosestHit()))
+            local shoulder = (abs (dot (tyrePoint - centre) alongVector)) > radius * 0.7
+            if above < reachable or (index <= 2 and shoulder) do append risky tyrePoint
+        )
+        append wheelPoints risky
         if index <= 2 then
         (
             local leftClear = amax 0.0 ((vrigSteerClearance active points centre 1.0 compression[index]) - 1.5)
@@ -1372,22 +1422,29 @@ fn vrigMeasureClearance bodyNodes wheelNodes measure profile scale =
         )
         else append clear undefined
     )
-    vrigFreeGrids grids
+    -- Keep the grids a wheel's arch needs for the per-frame check.
+    local kept = #()
+    for meshIndex = 1 to grids.count do
+        if (findItem used meshIndex) > 0 then append kept grids[meshIndex] else grids[meshIndex].free()
     -- A left turn puts the left wheel on the inside.
     VehicleRigClearance compression:compression archGaps:gaps \
         leftTurnLimits:#(clear[1][1], clear[2][1]) rightTurnLimits:#(clear[2][2], clear[1][2]) \
-        ignored:ignored seconds:((timeStamp() - started) / 1000.0)
+        ignored:ignored seconds:((timeStamp() - started) / 1000.0) \
+        centres:(copy measure.wheelCentres #nomap) wheelPoints:wheelPoints wheelGrids:wheelGrids grids:kept
 )
 
+-- The grids are measured where the vehicle stands, so the key includes
+-- its position: moving the vehicle measures again.
 fn vrigClearanceKey rootNode measure profile scale bodyNodes =
 (
     local key = (rootNode.inode.handle as string) + "|" + profile.name + "|" + (scale as string) + "|" + \
-        (bodyNodes.count as string) + "|" + (measure.tyreRadius as string)
+        (bodyNodes.count as string) + "|" + (measure.tyreRadius as string) + "|" + (measure.groundCentre as string)
     for centre in measure.wheelCentres do key += "|" + ((centre - measure.groundCentre) as string)
     key
 )
 
 -- The clearance for this vehicle, measured once per layout per session.
+-- Only the latest is kept: its ray grids hold copies of the body meshes.
 fn vrigCachedClearance rootNode bodyNodes wheelNodes measure profile scale =
 (
     local key = vrigClearanceKey rootNode measure profile scale bodyNodes
@@ -1395,10 +1452,56 @@ fn vrigCachedClearance rootNode bodyNodes wheelNodes measure profile scale =
     for entry in vrigClearanceCache where entry[1] == key do found = entry[2]
     if found == undefined do
     (
+        for entry in vrigClearanceCache do vrigFreeGrids entry[2].grids
         found = vrigMeasureClearance bodyNodes wheelNodes measure profile scale
-        append vrigClearanceCache #(key, found)
+        vrigClearanceCache = #(#(key, found))
     )
     found
+)
+
+-- How the body has moved from rest: rotated about its pivot by the Euler
+-- angles the bake writes, then raised by `heave` scene units.
+fn vrigBodyMatrix pivot eulerValues heave =
+(
+    (transMatrix (-pivot)) * ((eulerAngles eulerValues.x eulerValues.y eulerValues.z) as matrix3) * \
+        (transMatrix (pivot + [0, 0, heave]))
+)
+
+-- True when wheel `index`, steered by `steer` degrees, touches one of the
+-- model's arches while the body has moved by `bodyMatrix`. The tyre is
+-- taken into the body's rest frame, where the grids were measured.
+fn vrigWheelTouches clearance index steer bodyMatrix =
+(
+    local centre = clearance.centres[index]
+    local toBody = inverse bodyMatrix
+    local wheelMatrix = (transMatrix (-centre)) * (rotateZMatrix steer) * (transMatrix centre)
+    local origin = centre * toBody
+    local hit = false
+    for tyrePoint in clearance.wheelPoints[index] while not hit do
+    (
+        local moved = tyrePoint * wheelMatrix * toBody
+        for grid in clearance.wheelGrids[index] while not hit do
+            if (grid.intersectSegment origin moved true) > 0 do hit = true
+    )
+    hit
+)
+
+fn vrigPoseTouches clearance bodyMatrix steers wheels =
+(
+    local hit = false
+    for index in wheels while not hit do hit = vrigWheelTouches clearance index steers[index] bodyMatrix
+    hit
+)
+
+-- The body's rest-to-current matrix for a fitted pose #(heave metres,
+-- nose-up pitch, left-up roll), scaled toward rest by `share`. Uses the
+-- same axis mapping the bake writes to the body's Euler tracks.
+fn vrigPoseMatrix pose share forwardAxis leftAxis pivot scale =
+(
+    local values = [0, 0, 0]
+    values[forwardAxis[1]] = forwardAxis[2] * pose[3] * share
+    values[leftAxis[1]] = -1.0 * leftAxis[2] * pose[2] * share
+    vrigBodyMatrix pivot values (pose[1] * share * scale)
 )
 
 -- Centre steering the arches allow, as #(left, right) degrees.
@@ -2149,6 +2252,8 @@ fn vrigBakeAnimation settings =
     local peakCompression = 0.0
     local steerHeld = false
     local leanHeld = false
+    local easedFrames = 0
+    local unresolvedFrames = 0
 
     with animate on
     (
@@ -2191,8 +2296,6 @@ fn vrigBakeAnimation settings =
                 rollState = vrigSuspensionStep rollState wanted[3] stepSeconds profile.rideFrequency profile.dampingRatio
             )
             local bodyPose = vrigFitBodyPose heaveState[1] pitchState[1] rollState[1] corners compressionLimits extensionLimit
-            for corner in corners do
-                peakCompression = amax peakCompression (-(vrigCornerRise bodyPose[1] bodyPose[2] bodyPose[3] corner))
 
             -- Steering, held at the lock the arches allow.
             local wantedSteer = vrigSteeringAngle curvature speed profile
@@ -2203,6 +2306,40 @@ fn vrigBakeAnimation settings =
             -- Positive steer is a left turn, which makes the left wheel the inner one.
             local steerLeft = if steerCentre >= 0.0 then steerAngles[1] else steerAngles[2]
             local steerRight = if steerCentre >= 0.0 then steerAngles[2] else steerAngles[1]
+
+            -- Near the limits, check the model's real arches. The travel
+            -- limits are measured straight up, but a rolling body also
+            -- slides its arches sideways over the tyres, so ease the body
+            -- back toward rest only as far as this model needs.
+            local steerUsage = if steerCentre >= 0.0 then (steerCentre / (amax 0.001 steerLimits[1])) \
+                else (-steerCentre / (amax 0.001 steerLimits[2]))
+            local checked = #()
+            for index = 1 to 4 do
+            (
+                local cornerUsage = if compressionLimits[index] <= 0.0 then 1.0 \
+                    else (-(vrigCornerRise bodyPose[1] bodyPose[2] bodyPose[3] corners[index]) / compressionLimits[index])
+                if cornerUsage > 0.5 or (index <= 2 and steerUsage > 0.6) do append checked index
+            )
+            if checked.count > 0 do
+            (
+                local steers = #(steerLeft, steerRight, 0.0, 0.0)
+                if vrigPoseTouches clearance (vrigPoseMatrix bodyPose 1.0 forwardAxis leftAxis bodyPivot scale) steers checked do
+                (
+                    local low = 0.0
+                    local high = 1.0
+                    for iteration = 1 to 6 do
+                    (
+                        local middle = (low + high) / 2.0
+                        if vrigPoseTouches clearance (vrigPoseMatrix bodyPose middle forwardAxis leftAxis bodyPivot scale) steers checked \
+                            then high = middle else low = middle
+                    )
+                    if low == 0.0 and (vrigPoseTouches clearance (vrigPoseMatrix bodyPose 0.0 forwardAxis leftAxis bodyPivot scale) steers checked) \
+                        then unresolvedFrames += 1 else easedFrames += 1
+                    bodyPose = #(bodyPose[1] * low, bodyPose[2] * low, bodyPose[3] * low)
+                )
+            )
+            for corner in corners do
+                peakCompression = amax peakCompression (-(vrigCornerRise bodyPose[1] bodyPose[2] bodyPose[3] corner))
 
             at time frame
             (
@@ -2257,6 +2394,10 @@ fn vrigBakeAnimation settings =
     append notes (vrigDescribeClearance clearance profile scale)
     if steerHeld do append notes "In the tightest sections the front wheels stop at the lock the arches allow."
     if leanHeld do append notes "Where the full lean would reach an arch, the body rises or leans less instead."
+    if easedFrames > 0 do
+        append notes ("In " + (easedFrames as string) + " frame(s) the body was eased back so an arch would not touch a tyre.")
+    if unresolvedFrames > 0 do
+        append notes ("In " + (unresolvedFrames as string) + " frame(s) a steered tyre touches an arch even with the body at rest; lower the steering lock or use a gentler path.")
     if not bodyDriven do append notes "The body is the vehicle root, so body roll and pitch are not applied."
     if steeringNode != undefined and steeringSpin == undefined do
         append notes "The steering wheel has no geometry to measure, so it does not turn."

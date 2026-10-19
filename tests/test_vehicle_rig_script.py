@@ -315,6 +315,40 @@ def test_clearance_comes_from_the_models_own_arches(source: str) -> None:
     assert "vrigCachedClearance rootNode clearanceBody wheelNodes measure profile scale" in bake
 
 
+def test_bake_eases_the_body_off_the_real_arches(source: str) -> None:
+    # Travel limits are measured straight up, but a rolling body also slides
+    # its arches sideways; near the limits each frame is checked against the
+    # model's own meshes and the body eased back only as far as needed.
+    bake = _function(source, "vrigBakeAnimation")
+    assert "vrigPoseTouches clearance (vrigPoseMatrix bodyPose 1.0" in bake
+    assert "bodyPose = #(bodyPose[1] * low, bodyPose[2] * low, bodyPose[3] * low)" in bake
+    assert "easedFrames" in bake and "unresolvedFrames" in bake
+
+
+def test_contact_check_moves_the_body_exactly_as_the_bake_does(source: str) -> None:
+    pose = _function(source, "vrigPoseMatrix")
+    assert "values[forwardAxis[1]] = forwardAxis[2] * pose[3] * share" in pose
+    assert "values[leftAxis[1]] = -1.0 * leftAxis[2] * pose[2] * share" in pose
+    bake = _function(source, "vrigBakeAnimation")
+    assert "forwardAxis[1] (forwardAxis[2] * bodyPose[3])" in bake
+    assert "leftAxis[1] (-1.0 * leftAxis[2] * bodyPose[2])" in bake
+    matrix = _function(source, "vrigBodyMatrix")
+    assert "(eulerAngles eulerValues.x eulerValues.y eulerValues.z) as matrix3" in matrix
+
+
+def test_contact_check_keeps_a_safety_skin_and_prunes_far_meshes(source: str) -> None:
+    measure = _function(source, "vrigMeasureClearance")
+    assert "(radius + 0.003 * scale) (halfWidth + 0.002 * scale)" in measure
+    assert "vrigGridWithin active[slot] points centre within" in measure
+
+
+def test_clearance_cache_holds_one_vehicle_and_frees_its_grids(source: str) -> None:
+    cached = _function(source, "vrigCachedClearance")
+    assert "vrigFreeGrids entry[2].grids" in cached
+    assert "vrigClearanceCache = #(#(key, found))" in cached
+    assert "(measure.groundCentre as string)" in _function(source, "vrigClearanceKey")
+
+
 def test_steering_stops_at_the_lock_the_arches_allow(source: str) -> None:
     bake = _function(source, "vrigBakeAnimation")
     assert "local steerLimits = vrigSteerLimits clearance profile" in bake
