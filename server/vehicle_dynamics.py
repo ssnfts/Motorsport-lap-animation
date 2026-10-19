@@ -366,6 +366,53 @@ def plan_speed_profile(
     return speeds
 
 
+def travel_times(distances: list[float], speeds: list[float]) -> list[float]:
+    """Seconds to reach each sample, crossing each span at its mean speed.
+
+    The mean of the end speeds is exact for constant acceleration across
+    the span, which is how ``distance_at_time`` moves the vehicle.
+    """
+
+    if len(distances) != len(speeds) or len(distances) < 2:
+        raise ValueError("distances and speeds need the same two or more samples")
+    times = [0.0]
+    for index in range(len(distances) - 1):
+        span = distances[index + 1] - distances[index]
+        mean = (speeds[index] + speeds[index + 1]) / 2.0
+        times.append(times[-1] + (0.0 if mean <= 1e-6 else span / mean))
+    return times
+
+
+def distance_at_time(
+    distances: list[float], speeds: list[float], times: list[float], elapsed_s: float
+) -> tuple[float, float]:
+    """Distance and speed ``elapsed_s`` seconds into the drive.
+
+    Each span is crossed at constant acceleration from its start speed to its
+    end speed, so speed changes smoothly through the samples. Interpolating
+    distance linearly would hold each span's mean speed and jump at every
+    sample, which shows as stepped creeping wherever the vehicle is slow
+    enough for one span to last several frames: pulling away and stopping.
+    """
+
+    if elapsed_s <= 0.0:
+        return distances[0], speeds[0]
+    if elapsed_s >= times[-1]:
+        return distances[-1], 0.0
+    low, high = 0, len(times) - 1
+    while high - low > 1:
+        middle = (low + high) // 2
+        if times[middle] <= elapsed_s:
+            low = middle
+        else:
+            high = middle
+    span = times[high] - times[low]
+    tau = elapsed_s - times[low]
+    accel = 0.0 if span <= 1e-12 else (speeds[high] - speeds[low]) / span
+    travelled = distances[low] + speeds[low] * tau + 0.5 * accel * tau * tau
+    return min(distances[high], max(distances[low], travelled)), speeds[low] + accel * tau
+
+
 @dataclass(frozen=True)
 class BodyPose:
     """Body offset from rest: heave up, nose-up pitch, left-side-up roll."""

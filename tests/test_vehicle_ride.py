@@ -15,10 +15,12 @@ from vehicle_dynamics import (  # noqa: E402
     Intensity,
     ackermann_angles,
     body_response,
+    distance_at_time,
     fit_body_pose,
     max_centre_steer_deg,
     plan_speed_profile,
     steering_angle_deg,
+    travel_times,
     validate_profile,
 )
 
@@ -179,6 +181,46 @@ def test_speed_profile_rejects_invalid_grip_usage():
     distances, curvatures = _track()
     with pytest.raises(ValueError, match="grip_usage"):
         plan_speed_profile(distances, curvatures, CAR, target_speed_mps=30.0, grip_usage=1.5)
+
+
+def _frame_positions(distances, speeds, fps=30.0):
+    times = travel_times(distances, speeds)
+    count = int(times[-1] * fps) + 2
+    return [distance_at_time(distances, speeds, times, frame / fps)[0] for frame in range(count)]
+
+
+def test_the_drive_passes_through_every_sample():
+    distances, curvatures = _track()
+    speeds = plan_speed_profile(distances, curvatures, CAR, target_speed_mps=30.0)
+    times = travel_times(distances, speeds)
+    for distance, time in zip(distances, times):
+        assert distance_at_time(distances, speeds, times, time)[0] == pytest.approx(distance, abs=1e-9)
+
+
+@pytest.mark.parametrize("grip", (0.35, 1.0))
+def test_speed_changes_smoothly_through_the_samples(grip):
+    # At walking pace one 0.5 m span lasts several frames; crossing it at its
+    # mean speed would step the speed at every sample.
+    distances, curvatures = _track()
+    speeds = plan_speed_profile(distances, curvatures, CAR, target_speed_mps=30.0, grip_usage=grip)
+    fps = 30.0
+    positions = _frame_positions(distances, speeds, fps)
+    limit = grip * max(CAR.acceleration_mps2, CAR.braking_mps2)
+    for before, now, after in zip(positions, positions[1:], positions[2:]):
+        assert abs(after - 2.0 * now + before) * fps * fps <= limit * 1.001
+
+
+def test_the_vehicle_rolls_to_a_stop_instead_of_halting():
+    distances, curvatures = _track()
+    grip = 0.55
+    speeds = plan_speed_profile(distances, curvatures, CAR, target_speed_mps=30.0, grip_usage=grip)
+    fps = 30.0
+    positions = _frame_positions(distances, speeds, fps)
+    steps = [later - earlier for earlier, later in zip(positions, positions[1:]) if later - earlier > 1e-12]
+    final = steps[-12:]
+    assert all(later <= earlier + 1e-12 for earlier, later in zip(final, final[1:]))
+    # The last frame of movement is no faster than one frame of braking can shed.
+    assert final[-1] * fps <= grip * CAR.braking_mps2 / fps * 1.001
 
 
 CORNERS = [(1.35, 0.72), (1.35, -0.72), (-1.35, 0.72), (-1.35, -0.72)]

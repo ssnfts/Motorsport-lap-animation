@@ -368,6 +368,13 @@ def test_driving_shares_grip_between_cornering_and_braking(source: str) -> None:
     assert "Driving style" in source
 
 
+def test_each_span_is_crossed_at_constant_acceleration(source: str) -> None:
+    state = _function(source, "vrigStateAtTime")
+    assert "0.5 * accel * tau * tau" in state
+    assert "motion.speeds[low] + accel * tau" in state
+    assert "(speeds[index] + speeds[index + 1]) / 2.0" in _function(source, "vrigTravelTimes")
+
+
 def test_the_body_settles_after_the_vehicle_stops(source: str) -> None:
     bake = _function(source, "vrigBakeAnimation")
     assert "motion.duration + settings.settleSeconds" in bake

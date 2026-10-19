@@ -676,7 +676,11 @@ fn vrigPlanMotion path profile targetSpeed gripUsage =
 )
 
 -- Distance, speed, curvature and vertical curvature `elapsed` seconds into
--- the drive; past the end the vehicle stays parked at the last point.
+-- the drive; past the end the vehicle stays parked at the last point. Each
+-- span is crossed at constant acceleration (the travel times use the mean
+-- of its end speeds), so speed changes smoothly instead of holding the
+-- span's mean and stepping at each sample, which showed as a stepped creep
+-- when pulling away and stopping. Mirrors vehicle_dynamics.distance_at_time.
 fn vrigStateAtTime motion elapsed =
 (
     local times = motion.times
@@ -696,9 +700,12 @@ fn vrigStateAtTime motion elapsed =
             if times[middle] <= elapsed then low = middle else high = middle
         )
         local span = times[high] - times[low]
-        local blend = if span <= 1e-12 then 0.0 else ((elapsed - times[low]) / span)
-        #(distances[low] + blend * (distances[high] - distances[low]), \
-          motion.speeds[low] + blend * (motion.speeds[high] - motion.speeds[low]), \
+        local tau = elapsed - times[low]
+        local blend = if span <= 1e-12 then 0.0 else (tau / span)
+        local accel = if span <= 1e-12 then 0.0 else ((motion.speeds[high] - motion.speeds[low]) / span)
+        local travelled = distances[low] + motion.speeds[low] * tau + 0.5 * accel * tau * tau
+        #(amin distances[high] (amax distances[low] travelled), \
+          motion.speeds[low] + accel * tau, \
           motion.curvatures[low] + blend * (motion.curvatures[high] - motion.curvatures[low]), \
           motion.verticalCurvatures[low] + blend * (motion.verticalCurvatures[high] - motion.verticalCurvatures[low]))
     )
