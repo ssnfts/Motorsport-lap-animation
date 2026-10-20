@@ -117,15 +117,15 @@ be read and accepted with **Accept warnings**.
 
 <table>
   <tr>
-    <td><img src="docs/images/dialog_preflight_error.png" width="386" alt="Preflight rejecting a spline with a zero-length segment and a duplicate knot"></td>
+    <td width="400"><img src="docs/images/dialog_preflight_error.png" width="386" alt="Preflight rejecting a spline with a zero-length segment and a duplicate knot"></td>
     <td><b>Preflight error.</b> The bad knots are named, so you know which one to weld. Nothing can be baked until the spline is fixed.</td>
   </tr>
   <tr>
-    <td><img src="docs/images/dialog_preflight.png" width="386" alt="Preflight passing: 193 m path, 20.9 s drive at up to 51 km/h, frames 0 to 664"></td>
+    <td width="400"><img src="docs/images/dialog_preflight.png" width="386" alt="Preflight passing: 193 m path, 20.9 s drive at up to 51 km/h, frames 0 to 664"></td>
     <td><b>Preflight passed.</b> 193 m of road and 20.9 s of driving at up to 51 km/h; the bake will use frames 0 to 664. With no warnings, Accept warnings is ticked for you and Bake Animation is enabled.</td>
   </tr>
   <tr>
-    <td><img src="docs/images/dialog_baked.png" width="386" alt="Bake report: top speed, peak wheel angle, body roll and pitch, wheel-arch clearance"></td>
+    <td width="400"><img src="docs/images/dialog_baked.png" width="386" alt="Bake report: top speed, peak wheel angle, body roll and pitch, wheel-arch clearance"></td>
     <td><b>Bake complete.</b> A summary of the drive (top speed, peak steering, roll and pitch) and of the wheel-arch clearance it kept.</td>
   </tr>
 </table>
