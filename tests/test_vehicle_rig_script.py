@@ -368,6 +368,14 @@ def test_driving_shares_grip_between_cornering_and_braking(source: str) -> None:
     assert "Driving style" in source
 
 
+def test_the_report_wraps_long_lines_to_fit_the_box(source: str) -> None:
+    rollout = source[source.index("rollout VehicleRigRollout"):]
+    assert "for row in (vrigWrapRows line 58) do text += row" in rollout
+    wrap = _function(source, "vrigWrapRows")
+    assert "filterString sentence \" \"" in wrap
+    assert "(current.count + 1 + word.count) > columns" in wrap
+
+
 def test_each_span_is_crossed_at_constant_acceleration(source: str) -> None:
     state = _function(source, "vrigStateAtTime")
     assert "0.5 * accel * tau * tau" in state

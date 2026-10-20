@@ -2426,6 +2426,25 @@ fn vrigBakeAnimation settings =
 -- Share of the tyres' grip each driving style uses.
 fn vrigDrivingStyles = #(#("Relaxed", 0.35), #("Normal", 0.55), #("Sporty", 0.75), #("Limit", 1.0))
 
+-- Splits one report sentence into rows of at most `columns` characters at
+-- word boundaries; the report box does not wrap, so long rows were cut off.
+fn vrigWrapRows sentence columns =
+(
+    local rows = #()
+    local current = ""
+    for word in (filterString sentence " ") do
+    (
+        if current.count > 0 and (current.count + 1 + word.count) > columns then
+        (
+            append rows current
+            current = word
+        )
+        else current = if current.count == 0 then word else (current + " " + word)
+    )
+    if current.count > 0 or rows.count == 0 do append rows current
+    rows
+)
+
 rollout VehicleRigRollout "Create Vehicle Rig" width:360
 (
     local boundRoot = undefined
@@ -2490,12 +2509,13 @@ rollout VehicleRigRollout "Create Vehicle Rig" width:360
         button removeButton "Remove Generated Rig" width:160
     )
 
-    edittext reportBox "" height:170 width:340 readonly:true
+    edittext reportBox "" height:230 width:340 readonly:true
 
     fn report lines =
     (
         local text = ""
-        for line in lines do text += line + "\r\n"
+        for line in lines do
+            for row in (vrigWrapRows line 58) do text += row + "\r\n"
         reportBox.text = text
     )
 
